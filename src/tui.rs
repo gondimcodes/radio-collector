@@ -564,9 +564,7 @@ fn render_ui(f: &mut Frame, state: &mut TuiState) {
 
         let dialog = Paragraph::new(dialog_lines).block(block);
         f.render_widget(dialog, area);
-    }
-    // 5. Modal Flutuante de Confirmação de Exclusão (se ativo)
-    else if let Some((_, ref title)) = state.pending_delete {
+    } else if let Some((_, ref title)) = state.pending_delete {
         let area = centered_rect(65, 25, f.area());
         f.render_widget(Clear, area);
 
@@ -602,7 +600,9 @@ fn render_ui(f: &mut Frame, state: &mut TuiState) {
                 Span::raw("     "),
                 Span::styled(
                     "     [N/Esc] Cancelar     ",
-                    Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(Color::Green)
+                        .add_modifier(Modifier::BOLD),
                 ),
             ]),
         ];
@@ -617,7 +617,11 @@ fn render_ui(f: &mut Frame, state: &mut TuiState) {
     }
 }
 
-fn centered_rect(percent_x: u16, percent_y: u16, r: ratatui::layout::Rect) -> ratatui::layout::Rect {
+fn centered_rect(
+    percent_x: u16,
+    percent_y: u16,
+    r: ratatui::layout::Rect,
+) -> ratatui::layout::Rect {
     let popup_layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([

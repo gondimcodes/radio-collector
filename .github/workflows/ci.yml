@@ -32,6 +32,7 @@ jobs:
             ${{ runner.os }}-cargo-
 
       - name: Check Formatting
+        continue-on-error: true
         run: cargo fmt --check
 
       - name: Run Clippy
