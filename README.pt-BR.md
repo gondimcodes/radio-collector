@@ -112,6 +112,7 @@ audio_quality = "0"                               # VBR 0 (~320 kbps)
 timeout_seconds = 180                             # Tempo limite por música
 embed_metadata = true                             # Injeta tags ID3 (artista, título)
 embed_thumbnail = true                            # Injeta capa oficial do álbum
+auto_download = true                              # Baixa direto (true) ou coloca como PENDENTE (false)
 
 [filter]
 min_title_length = 4                              # Tamanho mínimo do título

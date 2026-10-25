@@ -112,6 +112,7 @@ audio_quality = "0"                               # VBR 0 (~320 kbps)
 timeout_seconds = 180                             # Download timeout per track
 embed_metadata = true                             # Embed ID3 tags (artist, title)
 embed_thumbnail = true                            # Embed album artwork
+auto_download = true                              # Download automatically (true) or queue as PENDING (false)
 
 [filter]
 min_title_length = 4                              # Minimum title length
