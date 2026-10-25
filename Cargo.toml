@@ -1,0 +1,21 @@
+[package]
+name = "radio-collector"
+version = "1.1.0"
+edition = "2021"
+authors = ["gondim <gondim@gmail.com>"]
+description = "Coletor inteligente de faixas de rádio online com TUI e download via yt-dlp"
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+ratatui = "0.29"
+crossterm = { version = "0.28", features = ["event-stream"] }
+serde = { version = "1.0", features = ["derive"] }
+toml = "0.8"
+clap = { version = "4", features = ["derive"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+regex = "1"
+chrono = { version = "0.4", features = ["serde"] }
+anyhow = "1.0"
+thiserror = "2.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

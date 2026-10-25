@@ -1,0 +1,21 @@
+[Unit]
+Description=Radio Stream Intelligent Audio Collector (Rust)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/local/bin/radio-collector --daemon
+Restart=always
+RestartSec=15
+StandardOutput=journal
+StandardError=journal
+
+# Hardening basico de seguranca
+ProtectSystem=full
+ProtectHome=false
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

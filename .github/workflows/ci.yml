@@ -1,0 +1,105 @@
+name: CI (Build & Validation)
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  check:
+    name: Check & Lint (x86_64)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Cache Cargo dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Check Formatting
+        run: cargo fmt --check
+
+      - name: Run Clippy
+        run: cargo clippy -- -D warnings
+
+      - name: Run Check
+        run: cargo check --verbose
+
+  build:
+    name: Build Linux (${{ matrix.job.arch }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        job:
+          # Linux amd64 (x86_64)
+          - arch: amd64
+            target: x86_64-unknown-linux-gnu
+            use_cross: false
+          # Linux arm64 (aarch64)
+          - arch: arm64
+            target: aarch64-unknown-linux-gnu
+            use_cross: true
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Cross
+        if: matrix.job.use_cross
+        run: |
+          mkdir -p ~/.cargo/bin
+          curl -L https://github.com/cross-rs/cross/releases/download/v0.2.5/cross-x86_64-unknown-linux-musl.tar.gz | tar xz -C ~/.cargo/bin
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.job.target }}
+
+      - name: Cache Cargo dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ matrix.job.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ matrix.job.target }}-cargo-
+
+      - name: Build standard (amd64)
+        if: "!matrix.job.use_cross"
+        run: cargo build --release --target ${{ matrix.job.target }}
+
+      - name: Build cross-compiled (arm64)
+        if: matrix.job.use_cross
+        run: cross build --release --target ${{ matrix.job.target }}
+
+      - name: Package Binary Artifact
+        run: |
+          mkdir -p dist
+          cp target/${{ matrix.job.target }}/release/radio-collector dist/radio-collector-linux-${{ matrix.job.arch }}
+          chmod +x dist/radio-collector-linux-${{ matrix.job.arch }}
+
+      - name: Upload Build Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: radio-collector-linux-${{ matrix.job.arch }}
+          path: dist/radio-collector-linux-${{ matrix.job.arch }}
+          if-no-files-found: error
+

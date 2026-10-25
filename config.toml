@@ -1,0 +1,40 @@
+# Configuração do Radio Collector
+# Local padrão no sistema: /etc/radio-collector/config.toml
+
+[stream]
+url = "http://sokakarecos.ddns.net:9005/light128"
+user_agent = "VLC/3.0.18 LibVLC/3.0.18"
+check_interval_seconds = 30
+timeout_seconds = 10
+
+[storage]
+# Diretório onde os arquivos MP3 de alta fidelidade serão salvos
+output_dir = "/var/musicas"
+# Banco SQLite para controle de deduplicação e histórico
+db_path = "/var/lib/radio-collector/musicas.db"
+
+[download]
+ytdlp_path = "/usr/local/bin/yt-dlp"
+audio_format = "mp3"
+audio_quality = "0"              # VBR 0 (máxima fidelidade ~320k)
+timeout_seconds = 180            # Timeout máximo por download
+embed_metadata = true
+embed_thumbnail = true
+auto_download = true             # Se true, baixa automaticamente; se false, registra como PENDENTE
+
+[filter]
+min_title_length = 4
+require_hyphen = true            # Exige 'Artista - Música'
+ignore_patterns = [
+    "kakarecos",
+    "so\\s*kakarecos",
+    "vinheta",
+    "comercial",
+    "chamada",
+    "radio\\s*light",
+]
+
+[ui]
+# Se true, abre a interface gráfica TUI (terminal interativo)
+# Se false (ou quando iniciado via --daemon), roda em background silencioso
+tui = true
