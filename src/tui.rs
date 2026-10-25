@@ -595,7 +595,9 @@ fn render_ui(f: &mut Frame, state: &mut TuiState) {
             Line::from(vec![
                 Span::styled(
                     "     [S] Sim (Confirmar Exclusão)     ",
-                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(Color::Red)
+                        .add_modifier(Modifier::BOLD),
                 ),
                 Span::raw("     "),
                 Span::styled(
@@ -657,7 +659,7 @@ pub fn count_mp3_files(dir: &str) -> usize {
             .filter(|e| {
                 e.path()
                     .extension()
-                    .map_or(false, |ext| ext.eq_ignore_ascii_case("mp3"))
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("mp3"))
             })
             .count()
     } else {

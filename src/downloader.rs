@@ -40,8 +40,7 @@ impl Downloader {
     ) -> Result<()> {
         // Sanitiza e trunca o título para nome de arquivo físico padronizado e seguro (CWE-1284)
         let safe_title = title
-            .replace('/', "-")
-            .replace('\\', "-")
+            .replace(['/', '\\'], "-")
             .replace('\0', "")
             .replace('"', "'");
         let safe_title: String = safe_title.trim().chars().take(150).collect();

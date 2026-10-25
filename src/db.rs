@@ -66,7 +66,7 @@ impl Database {
         if let Ok(entries) = fs::read_dir(dest_path) {
             for entry in entries.flatten() {
                 let path = entry.path();
-                if path.extension().map_or(false, |e| e.eq_ignore_ascii_case("mp3")) {
+                if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("mp3")) {
                     if let Ok(meta) = path.metadata() {
                         if meta.len() >= 500 * 1024 {
                             let file_stem = path

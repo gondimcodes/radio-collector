@@ -238,7 +238,7 @@ async fn run_observer(
 
     loop {
         // A cada ~10 segundos (20 iterações de 500ms), afere a conexão do stream para status do cabeçalho
-        if check_counter % 20 == 0 {
+        if check_counter.is_multiple_of(20) {
             let now = chrono::Local::now().format("%H:%M:%S").to_string();
             match icy.fetch_current_title().await {
                 Ok(result) => {
