@@ -18,7 +18,7 @@ pub struct IcyResult {
 
 enum StreamConnection {
     Plain(TcpStream),
-    Tls(TlsStream<TcpStream>),
+    Tls(Box<TlsStream<TcpStream>>),
 }
 
 impl AsyncRead for StreamConnection {
@@ -29,7 +29,7 @@ impl AsyncRead for StreamConnection {
     ) -> std::task::Poll<std::io::Result<()>> {
         match self.get_mut() {
             StreamConnection::Plain(s) => std::pin::Pin::new(s).poll_read(cx, buf),
-            StreamConnection::Tls(s) => std::pin::Pin::new(s).poll_read(cx, buf),
+            StreamConnection::Tls(s) => std::pin::Pin::new(&mut **s).poll_read(cx, buf),
         }
     }
 }
@@ -42,7 +42,7 @@ impl AsyncWrite for StreamConnection {
     ) -> std::task::Poll<std::io::Result<usize>> {
         match self.get_mut() {
             StreamConnection::Plain(s) => std::pin::Pin::new(s).poll_write(cx, buf),
-            StreamConnection::Tls(s) => std::pin::Pin::new(s).poll_write(cx, buf),
+            StreamConnection::Tls(s) => std::pin::Pin::new(&mut **s).poll_write(cx, buf),
         }
     }
 
@@ -52,7 +52,7 @@ impl AsyncWrite for StreamConnection {
     ) -> std::task::Poll<std::io::Result<()>> {
         match self.get_mut() {
             StreamConnection::Plain(s) => std::pin::Pin::new(s).poll_flush(cx),
-            StreamConnection::Tls(s) => std::pin::Pin::new(s).poll_flush(cx),
+            StreamConnection::Tls(s) => std::pin::Pin::new(&mut **s).poll_flush(cx),
         }
     }
 
@@ -62,7 +62,7 @@ impl AsyncWrite for StreamConnection {
     ) -> std::task::Poll<std::io::Result<()>> {
         match self.get_mut() {
             StreamConnection::Plain(s) => std::pin::Pin::new(s).poll_shutdown(cx),
-            StreamConnection::Tls(s) => std::pin::Pin::new(s).poll_shutdown(cx),
+            StreamConnection::Tls(s) => std::pin::Pin::new(&mut **s).poll_shutdown(cx),
         }
     }
 }
@@ -123,7 +123,7 @@ impl IcyClient {
                 .await
                 .with_context(|| format!("Falha no handshake TLS com {}", host))?;
 
-            Ok(StreamConnection::Tls(tls_stream))
+            Ok(StreamConnection::Tls(Box::new(tls_stream)))
         } else {
             Ok(StreamConnection::Plain(stream))
         }
