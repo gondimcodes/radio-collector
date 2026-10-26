@@ -1,12 +1,16 @@
 [package]
 name = "radio-collector"
-version = "1.1.0"
+version = "1.1.1"
 edition = "2021"
 authors = ["gondim <gondim@gmail.com>"]
 description = "Coletor inteligente de faixas de rádio online com TUI e download via yt-dlp"
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["logging", "tls12", "ring"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+rustls-pki-types = "1"
+webpki-roots = "1.0"
 ratatui = "0.29"
 crossterm = { version = "0.28", features = ["event-stream"] }
 serde = { version = "1.0", features = ["derive"] }

@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.1.1] - 2026-10-25
+
+### Added
+- **Native TLS/HTTPS Stream Support**:
+  - Integrated `tokio-rustls`, `rustls` (using `ring`), and `webpki-roots` for secure, asynchronous TLS connections to ICY streams without external C OpenSSL dependencies.
+  - Automatically identifies `https://` schemas and defaults to port 443 with TLS encryption.
+- **HTTP 3xx Redirection Handling**:
+  - Implemented automatic redirection resolution (HTTP 301, 302, 303, 307, 308) with a safety cap of 5 hops.
+  - Supports modern radio CDNs and cloud aggregators (e.g., Zeno.FM, Surfer Network) that balance traffic via dynamic HTTP 302 redirects with query token authentication.
+
+---
+
 ## [1.1.0] - 2026-10-25
 
 ### Added
