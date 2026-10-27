@@ -65,18 +65,21 @@ impl TuiState {
         }
     }
 
+    pub fn refresh_stats(&mut self, db: &Database) {
+        if let Ok((success, failed, cached)) = db.get_stats() {
+            self.total_success = success;
+            self.total_failed = failed;
+            self.total_cached = cached;
+        }
+    }
+
     pub fn next_row(&mut self) {
         if self.history.is_empty() {
             return;
         }
+        let last = self.history.len().saturating_sub(1);
         let i = match self.table_state.selected() {
-            Some(i) => {
-                if i >= self.history.len().saturating_sub(1) {
-                    0
-                } else {
-                    i + 1
-                }
-            }
+            Some(i) => (i + 1).min(last),
             None => 0,
         };
         self.table_state.select(Some(i));
@@ -87,16 +90,40 @@ impl TuiState {
             return;
         }
         let i = match self.table_state.selected() {
-            Some(i) => {
-                if i == 0 {
-                    self.history.len().saturating_sub(1)
-                } else {
-                    i - 1
-                }
-            }
+            Some(i) => i.saturating_sub(1),
             None => 0,
         };
         self.table_state.select(Some(i));
+    }
+
+    pub fn page_down(&mut self, step: usize) {
+        if self.history.is_empty() {
+            return;
+        }
+        let current = self.table_state.selected().unwrap_or(0);
+        let next = (current + step).min(self.history.len() - 1);
+        self.table_state.select(Some(next));
+    }
+
+    pub fn page_up(&mut self, step: usize) {
+        if self.history.is_empty() {
+            return;
+        }
+        let current = self.table_state.selected().unwrap_or(0);
+        let prev = current.saturating_sub(step);
+        self.table_state.select(Some(prev));
+    }
+
+    pub fn first_row(&mut self) {
+        if !self.history.is_empty() {
+            self.table_state.select(Some(0));
+        }
+    }
+
+    pub fn last_row(&mut self) {
+        if !self.history.is_empty() {
+            self.table_state.select(Some(self.history.len() - 1));
+        }
     }
 
     pub fn request_action_or_delete(&mut self) {
@@ -105,10 +132,10 @@ impl TuiState {
                 let item = &self.history[i];
                 if item.status == HistoryStatus::Pending {
                     self.pending_action =
-                        Some((i, format!("{} - {}", item.artist, item.title)));
-                } else if item.status == HistoryStatus::Success {
+                        Some((i, item.clean_full_title()));
+                } else if item.status == HistoryStatus::Success || item.status == HistoryStatus::Failed {
                     self.pending_delete =
-                        Some((i, format!("{} - {}", item.artist, item.title)));
+                        Some((i, item.clean_full_title()));
                 }
             }
         }
@@ -118,10 +145,12 @@ impl TuiState {
         if let Some((i, _)) = self.pending_delete.take() {
             if i < self.history.len() {
                 let item = self.history.remove(i);
-                let full_title = format!("{} - {}", item.artist, item.title);
+                let full_title = item.clean_full_title();
                 let _ = db.delete_track(&full_title, &self.output_dir);
                 if item.status == HistoryStatus::Success && self.total_success > 0 {
                     self.total_success -= 1;
+                } else if item.status == HistoryStatus::Failed && self.total_failed > 0 {
+                    self.total_failed -= 1;
                 }
                 if self.history.is_empty() {
                     self.table_state.select(None);
@@ -138,7 +167,7 @@ impl TuiState {
     }
 
     pub fn handle_event(&mut self, event: CollectorEvent) {
-        let now = chrono::Local::now().format("%H:%M:%S").to_string();
+        let now = chrono::Local::now().format("%d/%m/%Y %H:%M:%S").to_string();
 
         match event {
             CollectorEvent::StreamStatus {
@@ -159,66 +188,79 @@ impl TuiState {
             }
             CollectorEvent::TrackPending { title } => {
                 let (artist, track) = split_artist_track(&title);
+                let norm_full = Database::normalize(&title);
                 self.history.retain(|item| {
-                    !(item.artist == artist && item.title.starts_with(&track))
+                    Database::normalize(&item.clean_full_title()) != norm_full
                 });
                 self.push_history(TrackHistoryItem {
                     time: now,
                     status: HistoryStatus::Pending,
                     artist,
                     title: track,
+                    details: None,
                 });
             }
             CollectorEvent::DownloadStarted { title } => {
                 self.active_download = Some(title.clone());
 
                 let (artist, track) = split_artist_track(&title);
+                let norm_full = Database::normalize(&title);
                 // Insere ou atualiza o item no topo do histórico com status BAIXANDO
                 self.history.retain(|item| {
-                    !(item.artist == artist && item.title.starts_with(&track))
+                    Database::normalize(&item.clean_full_title()) != norm_full
                 });
                 self.push_history(TrackHistoryItem {
                     time: now,
                     status: HistoryStatus::Downloading,
                     artist,
                     title: track,
+                    details: None,
                 });
             }
             CollectorEvent::DownloadFinished { title, success, message } => {
                 self.active_download = None;
                 let (artist, track) = split_artist_track(&title);
+                let norm_artist = Database::normalize(&artist);
+                let norm_track = Database::normalize(&track);
+                let norm_full = Database::normalize(&title);
+
+                let is_matching = |item: &TrackHistoryItem| -> bool {
+                    let i_art = Database::normalize(&item.artist);
+                    let i_tra = Database::normalize(&item.title);
+                    let i_full = Database::normalize(&item.clean_full_title());
+                    (!norm_artist.is_empty() && i_art == norm_artist && i_tra == norm_track)
+                        || i_full == norm_full
+                };
+
                 if success {
                     self.total_success += 1;
                     let had_failure = self.history.iter().any(|item| {
-                        item.status == HistoryStatus::Failed
-                            && item.artist == artist
-                            && item.title.starts_with(&track)
+                        (item.status == HistoryStatus::Failed || item.status == HistoryStatus::Downloading)
+                            && is_matching(item)
                     });
                     if had_failure && self.total_failed > 0 {
                         self.total_failed -= 1;
                     }
                     // Remove linha de BAIXANDO ou FALHA anterior
-                    self.history.retain(|item| {
-                        !(item.artist == artist && item.title.starts_with(&track))
-                    });
+                    self.history.retain(|item| !is_matching(item));
 
                     self.push_history(TrackHistoryItem {
                         time: now,
                         status: HistoryStatus::Success,
                         artist,
                         title: track,
+                        details: None,
                     });
                 } else {
                     self.total_failed += 1;
-                    self.history.retain(|item| {
-                        !(item.artist == artist && item.title.starts_with(&track))
-                    });
+                    self.history.retain(|item| !is_matching(item));
 
                     self.push_history(TrackHistoryItem {
                         time: now,
                         status: HistoryStatus::Failed,
                         artist,
-                        title: format!("{} ({})", track, message),
+                        title: track,
+                        details: Some(message),
                     });
                 }
             }
@@ -236,6 +278,7 @@ impl TuiState {
                     status: HistoryStatus::Cached,
                     artist,
                     title: track,
+                    details: None,
                 });
             }
             CollectorEvent::TrackIgnored { title, reason } => {
@@ -245,7 +288,8 @@ impl TuiState {
                     time: now,
                     status: HistoryStatus::Ignored,
                     artist,
-                    title: format!("{} [{}]", track, reason),
+                    title: track,
+                    details: Some(reason),
                 });
             }
         }
@@ -253,7 +297,7 @@ impl TuiState {
 
     fn push_history(&mut self, item: TrackHistoryItem) {
         self.history.insert(0, item);
-        if self.history.len() > 100 {
+        if self.history.len() > 10000 {
             self.history.pop();
         }
     }
@@ -262,6 +306,7 @@ impl TuiState {
 pub async fn run_tui(
     mut state: TuiState,
     mut event_rx: Receiver<CollectorEvent>,
+    event_tx: tokio::sync::mpsc::Sender<CollectorEvent>,
     db: Arc<Database>,
     download_cfg: DownloadConfig,
 ) -> Result<()> {
@@ -276,6 +321,7 @@ pub async fn run_tui(
         // 1. Processa eventos pendentes do canal
         while let Ok(event) = event_rx.try_recv() {
             state.handle_event(event);
+            state.refresh_stats(&db);
         }
 
         // 2. Renderiza frame com estado da tabela mutável
@@ -291,20 +337,36 @@ pub async fn run_tui(
                             if let Some((idx, full_title)) = state.pending_action.take() {
                                 if idx < state.history.len() {
                                     state.history[idx].status = HistoryStatus::Downloading;
-                                    state.history[idx].time = chrono::Local::now().format("%H:%M:%S").to_string();
+                                    state.history[idx].time = chrono::Local::now().format("%d/%m/%Y %H:%M:%S").to_string();
                                     let db_clone = Arc::clone(&db);
                                     let dl_clone = Arc::clone(&downloader);
                                     let title_clone = full_title.clone();
+                                    let tx_clone = event_tx.clone();
                                     tokio::spawn(async move {
                                         let _ = db_clone.record_event("DOWNLOAD_START", &title_clone);
                                         match dl_clone.download(&title_clone).await {
                                             Ok(()) => {
                                                 let _ = db_clone.record(&title_clone, "SUCESSO");
                                                 let _ = db_clone.record_event("DOWNLOAD_FINISH", &format!("OK|{}", title_clone));
+                                                let _ = tx_clone
+                                                    .send(CollectorEvent::DownloadFinished {
+                                                        title: title_clone,
+                                                        success: true,
+                                                        message: "OK".to_string(),
+                                                    })
+                                                    .await;
                                             }
                                             Err(e) => {
+                                                let err_msg = e.to_string();
                                                 let _ = db_clone.record(&title_clone, "FALHA");
-                                                let _ = db_clone.record_event("DOWNLOAD_FINISH", &format!("ERR|{}|{}", e, title_clone));
+                                                let _ = db_clone.record_event("DOWNLOAD_FINISH", &format!("ERR|{}|{}", err_msg, title_clone));
+                                                let _ = tx_clone
+                                                    .send(CollectorEvent::DownloadFinished {
+                                                        title: title_clone,
+                                                        success: false,
+                                                        message: err_msg,
+                                                    })
+                                                    .await;
                                             }
                                         }
                                     });
@@ -351,6 +413,10 @@ pub async fn run_tui(
                         KeyCode::Char('q') | KeyCode::Esc => break,
                         KeyCode::Up | KeyCode::Char('k') => state.previous_row(),
                         KeyCode::Down | KeyCode::Char('j') => state.next_row(),
+                        KeyCode::PageUp => state.page_up(15),
+                        KeyCode::PageDown => state.page_down(15),
+                        KeyCode::Home => state.first_row(),
+                        KeyCode::End => state.last_row(),
                         KeyCode::Char('b') | KeyCode::Char('B') | KeyCode::Enter => {
                             if let Some(i) = state.table_state.selected() {
                                 if i < state.history.len() && state.history[i].status == HistoryStatus::Pending {
@@ -362,6 +428,52 @@ pub async fn run_tui(
                             if let Some(i) = state.table_state.selected() {
                                 if i < state.history.len() && state.history[i].status == HistoryStatus::Pending {
                                     state.request_action_or_delete();
+                                }
+                            }
+                        }
+                        KeyCode::Char('t') | KeyCode::Char('T') => {
+                            if let Some(i) = state.table_state.selected() {
+                                if i < state.history.len() {
+                                    let item = &state.history[i];
+                                    if item.status == HistoryStatus::Failed || item.status == HistoryStatus::Pending {
+                                        let full_title = item.clean_full_title();
+                                        state.history[i].status = HistoryStatus::Downloading;
+                                        state.history[i].time = chrono::Local::now().format("%d/%m/%Y %H:%M:%S").to_string();
+                                        state.history[i].details = None;
+
+                                        let db_clone = Arc::clone(&db);
+                                        let dl_clone = Arc::clone(&downloader);
+                                        let title_clone = full_title.clone();
+                                        let tx_clone = event_tx.clone();
+                                        tokio::spawn(async move {
+                                            let _ = db_clone.record_event("DOWNLOAD_START", &title_clone);
+                                            match dl_clone.download(&title_clone).await {
+                                                Ok(()) => {
+                                                    let _ = db_clone.record(&title_clone, "SUCESSO");
+                                                    let _ = db_clone.record_event("DOWNLOAD_FINISH", &format!("OK|{}", title_clone));
+                                                    let _ = tx_clone
+                                                        .send(CollectorEvent::DownloadFinished {
+                                                            title: title_clone,
+                                                            success: true,
+                                                            message: "OK".to_string(),
+                                                        })
+                                                        .await;
+                                                }
+                                                Err(e) => {
+                                                    let err_msg = e.to_string();
+                                                    let _ = db_clone.record(&title_clone, "FALHA");
+                                                    let _ = db_clone.record_event("DOWNLOAD_FINISH", &format!("ERR|{}|{}", err_msg, title_clone));
+                                                    let _ = tx_clone
+                                                        .send(CollectorEvent::DownloadFinished {
+                                                            title: title_clone,
+                                                            success: false,
+                                                            message: err_msg,
+                                                        })
+                                                        .await;
+                                                }
+                                            }
+                                        });
+                                    }
                                 }
                             }
                         }
@@ -465,7 +577,7 @@ fn render_ui(f: &mut Frame, state: &mut TuiState) {
                 Cell::from(item.time.clone()),
                 Cell::from(item.status.as_str()).style(status_style),
                 Cell::from(item.artist.clone()),
-                Cell::from(item.title.clone()),
+                Cell::from(item.display_track_and_details()),
             ])
         })
         .collect();
@@ -473,14 +585,14 @@ fn render_ui(f: &mut Frame, state: &mut TuiState) {
     let table = Table::new(
         rows,
         [
-            Constraint::Length(10), // Hora
+            Constraint::Length(19), // Data e Hora: "27/10/2026 18:51:25"
             Constraint::Length(12), // Status
             Constraint::Length(25), // Artista
             Constraint::Min(20),    // Título / Detalhes
         ],
     )
     .header(
-        Row::new(vec!["HORA", "STATUS", "ARTISTA", "FAIXA / DETALHES"]).style(
+        Row::new(vec!["DATA / HORA", "STATUS", "ARTISTA", "FAIXA / DETALHES"]).style(
             Style::default()
                 .fg(Color::White)
                 .add_modifier(Modifier::BOLD),
@@ -489,7 +601,7 @@ fn render_ui(f: &mut Frame, state: &mut TuiState) {
     .block(
         Block::default()
             .borders(Borders::ALL)
-            .title(" Histórico de Faixas (Selecione com ↑/↓ e tecle 'd' ou 'Delete' para excluir) "),
+            .title(" Histórico de Faixas (↑/↓ Navegar | PgUp/PgDn Paginar | 't' Tentar Novamente | 'd' Excluir) "),
     )
     .row_highlight_style(
         Style::default()
@@ -505,7 +617,7 @@ fn render_ui(f: &mut Frame, state: &mut TuiState) {
     let total_disco = count_mp3_files(&state.output_dir);
 
     let footer_text = format!(
-        " [↑/↓] Navegar | [Enter/b] Baixar Pendente | [r/d] Recusar/Excluir | [q] Sair | Total no Acervo (MP3): {} | Cache: {} | Ignoradas: {} | Falhas: {}",
+        " [↑/↓] Navegar | [PgUp/PgDn] Paginar | [Enter/b] Baixar | [t] Tentar | [r/d] Recusar/Excluir | [q] Sair | Total no Acervo (MP3): {} | Cache: {} | Ignoradas: {} | Falhas: {}",
         total_disco, state.total_cached, state.total_ignored, state.total_failed
     );
     let footer = Paragraph::new(footer_text).block(

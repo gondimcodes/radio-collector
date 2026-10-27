@@ -21,6 +21,7 @@ timeout_seconds = 180            # Timeout máximo por download
 embed_metadata = true
 embed_thumbnail = true
 auto_download = true             # Se true, baixa automaticamente; se false, registra como PENDENTE
+# cookies_file = "/etc/radio-collector/cookies.txt" # Opcional: cookies do YouTube para faixas com restrição de idade (Age-Gate)
 
 [filter]
 min_title_length = 4

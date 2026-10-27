@@ -44,6 +44,8 @@ pub struct DownloadConfig {
     pub embed_thumbnail: bool,
     #[serde(default = "default_true")]
     pub auto_download: bool,
+    #[serde(default)]
+    pub cookies_file: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -123,5 +125,26 @@ impl Config {
             "Nenhum arquivo de configuração encontrado. Procurado em: {:?}",
             candidate_paths
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_download_config_defaults_and_cookies() {
+        let toml_str = r#"
+            ytdlp_path = "/usr/bin/yt-dlp"
+            cookies_file = "/etc/radio-collector/cookies.txt"
+        "#;
+        let cfg: DownloadConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(cfg.ytdlp_path, "/usr/bin/yt-dlp");
+        assert_eq!(cfg.audio_format, "mp3");
+        assert_eq!(cfg.audio_quality, "0");
+        assert!(cfg.embed_metadata);
+        assert!(cfg.embed_thumbnail);
+        assert!(cfg.auto_download);
+        assert_eq!(cfg.cookies_file, Some("/etc/radio-collector/cookies.txt".to_string()));
     }
 }

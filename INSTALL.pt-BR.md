@@ -116,7 +116,10 @@ radio-collector
 
 * **Com o serviço do systemd rodando**: A TUI entra automaticamente em **Modo Monitor**, observando os downloads em tempo real sem conflitar com o daemon.
 * **Com o serviço parado**: A TUI assume a coleta standalone e baixa diretamente.
-* **Navegação**: Teclas `↑`/`↓` ou `k`/`j`.
+* **Navegação**: Teclas `↑`/`↓` ou `k`/`j` (delimitada, sem loop circular).
+* **Paginação**: Teclas `PageUp`/`PageDown` (salta 15 faixas), `Home`/`End` (vai ao topo ou fim).
+* **Tentar Novamente Faixas com Falha/Pendentes**: Tecle `t` ou `T` sobre qualquer faixa com `FALHA` ou `PENDENTE` para disparar novo download em background.
+* **Baixar Faixa Pendente**: Tecle `Enter` ou `b`.
 * **Exclusão Segura**: Selecione a faixa e tecle `d` ou `Delete` (abre modal de confirmação para remover da base e do disco).
 * **Sair**: Tecle `q`.
 

@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.2.0] - 2026-10-27
+
+### Added
+- **Primary YouTube Music Catalog Search**:
+  - Integrated direct search via `https://music.youtube.com/search?q=...` prior to standard YouTube search. Bypasses adult/sensitive keyword censorship (e.g. titles with "Making Love") that caused YouTube's standard web search to return 0 items.
+- **Interactive Retry (`[t]`) in TUI for Failed and Pending Tracks**:
+  - Added dedicated `'t'` / `'T'` shortcut in TUI to immediately re-attempt downloading any selected track marked as `FALHA` or `PENDENTE`.
+  - Dispatches an asynchronous download task with the sanitized clean track name, resets the state to `BAIXANDO`, and updates SQLite status and counters atomically upon success (`SUCESSO`) or failure (`FALHA`).
+  - Added ability to dismiss/delete failed entries with `'d'` / `Delete`.
+- **Full History Pre-Loading & Keyboard Pagination (PageUp / PageDown / Home / End)**:
+  - Removed the 100-record cap: `Database::get_all_history` loads all registered tracks from the database so the operator can scroll through the entire catalog from top to bottom.
+  - Added `PageUp` and `PageDown` shortcuts jumping 15 rows per keystroke, plus `Home` and `End` to jump directly to the top or bottom of the history.
+  - Replaced cyclical wrap-around navigation with strict boundary stops: reaching the bottom or top of the history no longer jumps to the opposite extreme.
+- **Full Date & Time Display (`DATA / HORA`)**:
+  - Replaced the time-only column with a full timestamp formatted as `DD/MM/YYYY HH:MM:SS`, both for existing database records and real-time stream detections.
+- **Multi-Candidate Resilient Search (`ytsearch5:` + `--max-downloads 1`)**:
+  - Upgraded YouTube search strategy from single-candidate (`ytsearch1:`) to multi-candidate (`ytsearch5:`): if the top search result is age-restricted (Age-Gate), geo-blocked, or unavailable, `yt-dlp` automatically skips to the next valid studio audio candidate without failing the entire download pipeline.
+  - Implemented 3-stage fallback: YouTube Music direct search, followed by `ytsearch5:{} official audio`, and finally broad `ytsearch5:{}`.
+- **YouTube API Android Client Emulation (`player_client=android,web`)**:
+  - Configured `--extractor-args "youtube:player_client=android,web"` to bypass desktop web age restrictions on audio streaming formats without requiring authentication.
+- **Optional YouTube Cookies Support (`cookies_file`)**:
+  - Added optional `cookies_file` configuration under `[download]` in `config.toml`, forwarding `--cookies <path>` to `yt-dlp` for full session authentication on strictly age-restricted catalog tracks.
+- **Dedicated Track Details Architecture in TUI**:
+  - Decoupled `title` from runtime error messages (`details: Option<String>`), preventing error strings from corrupting track titles during retries or re-downloads.
+
+### Fixed
+- **yt-dlp Exit Code 101 Treated as Failure**:
+  - Fixed an issue where `yt-dlp`'s standard exit code `101` (denoting successful termination upon hitting `--max-downloads 1`) was treated as a process error by `status.success()`, triggering premature leftover cleanups and deleting downloaded MP3 files.
+- **Stuck `BAIXANDO` Status on TUI Retries**:
+  - Fixed an IPC race condition where spawned download tasks inside the TUI did not directly signal completion back to the local event channel, leaving retried tracks stuck in `BAIXANDO`.
+  - Added direct channel notification (`event_tx.send(CollectorEvent::DownloadFinished)`) and robust case-insensitive/normalized track matching so the TUI immediately transitions retried tracks to `BAIXADO` (green) and decrements `total_failed`.
+
+---
+
 ## [1.1.1] - 2026-10-25
 
 ### Added

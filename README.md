@@ -12,14 +12,17 @@ Rather than ripping continuous, lossy radio audio streams riddled with station j
 
 ## Key Features
 
-* **Interactive Terminal UI (`ratatui`)**: Real-time terminal dashboard featuring the current playing track, discrete status transitions, recent history table with action modals (`[Enter/b]` to download pending, `[r/d]` to reject/delete), and filesystem-synchronized counters.
+* **Interactive Terminal UI (`ratatui`)**: Real-time terminal dashboard featuring current track monitoring, discrete state transitions, complete catalog history with bounded pagination (`PageUp`/`PageDown`/`Home`/`End`), interactive retry for failed tracks (`[t]`), manual download of pending items (`[Enter/b]`), deletion modals (`[d]`), and filesystem-synchronized counters.
 * **Smart Dual-Mode Architecture**:
   * **Interactive TUI Mode**: Ran directly in the terminal for monitoring and management. Automatically detects if the background `systemd` daemon is running and enters **Monitor Mode** without firing duplicate downloads.
   * **Headless Daemon Mode (`--daemon`)**: Runs 24/7 in the background via `systemd` without rendering a UI, producing structured logs directly to `journald`.
 * **Zero Bandwidth Waste**: Connects to the Icecast/SHOUTcast stream, reads only the metadata headers and ICY track title interval, and immediately disconnects (~1 KB per poll).
 * **2-Tier Intelligent Deduplication**:
-  * **Embedded SQLite Database**: Persistent history with case-insensitive normalization and whitespace stripping (WAL mode).
+  * **Embedded SQLite Database**: Persistent history with case-insensitive normalization and whitespace stripping (WAL mode). Obsolete failure records are automatically purged upon successful download.
   * **Physical Filesystem Reconciliation**: Automatically inspects destination directories on startup to heal database records and prevent redundant downloads.
+* **Resilient Search & Retrieval**:
+  * Direct YouTube Music catalog search with multi-candidate fallback (`ytsearch5:`) and age-gate bypass mechanisms.
+  * Optional YouTube cookies support (`cookies_file`) for restricted tracks.
 * **Configurable Station Filter**: Customizable regex patterns to identify and discard promos, ads, station IDs, and invalid titles.
 * **Extraction Resilience & Failure Safeguards**:
   * Automatically converts WebP thumbnails to JPEG format before ID3 injection (preventing `ffprobe` post-processing crashes).
@@ -65,7 +68,11 @@ radio-collector --config /path/to/custom_config.toml
 ```
 
 #### Keyboard Shortcuts:
-* **`↑` / `↓`** (or **`k` / `j`**): Navigate and select tracks in the history table with the cursor indicator (`▶`).
+* **`↑` / `↓`** (or **`k` / `j`**): Navigate and select tracks in the history table with the cursor indicator (`▶`). Scrolling stops cleanly at table boundaries (no circular looping).
+* **`PageUp` / `PageDown`**: Jump 15 tracks up or down for fast library navigation.
+* **`Home` / `End`**: Jump directly to the newest (top) or oldest (bottom) track.
+* **`t`** or **`T`**: Retry downloading the selected failed (`FALHA`) or pending (`PENDENTE`) track immediately in the background. Automatically updates status to `BAIXANDO` and reconciles counters upon completion.
+* **`Enter`** or **`b`**: Download the selected pending (`PENDENTE`) track.
 * **`d`** or **`Delete`**: Open floating confirmation modal to safely delete the selected track from both SQLite and the filesystem (`[S]` confirms deletion, `[N]` or `Esc` cancels).
 * **`q`** or **`Esc`**: Gracefully exit the application and restore terminal state.
 
@@ -113,6 +120,7 @@ timeout_seconds = 180                             # Download timeout per track
 embed_metadata = true                             # Embed ID3 tags (artist, title)
 embed_thumbnail = true                            # Embed album artwork
 auto_download = true                              # Download automatically (true) or queue as PENDING (false)
+# cookies_file = "/etc/radio-collector/cookies.txt" # Optional cookies file for age-restricted / authenticated tracks
 
 [filter]
 min_title_length = 4                              # Minimum title length

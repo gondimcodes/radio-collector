@@ -116,7 +116,10 @@ radio-collector
 
 * **When the systemd service is active**: The TUI automatically enters **Monitor Mode**, observing downloads in real time without conflicting with the background daemon.
 * **When the service is stopped**: The TUI runs as an independent collector and downloads tracks directly.
-* **Navigation**: `↑`/`↓` arrows or `k`/`j` keys.
+* **Navigation**: `↑`/`↓` arrows or `k`/`j` keys (bounded, no circular looping).
+* **Pagination**: `PageUp`/`PageDown` (jumps 15 tracks), `Home`/`End` (jump to top or bottom).
+* **Retry Failed / Pending Downloads**: Press `t` or `T` on any failed (`FALHA`) or pending track to retry download in the background.
+* **Manual Download**: Press `Enter` or `b` on any pending track.
 * **Safe Deletion**: Select a track and press `d` or `Delete` (opens a confirmation modal to remove it from both SQLite and the disk).
 * **Quit**: Press `q`.
 

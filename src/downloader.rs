@@ -52,8 +52,59 @@ impl Downloader {
             safe_title
         );
 
-        let search_query = format!("ytsearch1:{} official audio", title);
+        // Tentativa 1: Busca nativa no catálogo do YouTube Music (sem censura de títulos como 'Making Love')
+        let music_query = format!("https://music.youtube.com/search?q={}", Self::urlencode(title));
+        if self.run_ytdlp_attempt(title, &music_query, &output_template).await.is_ok() {
+            return Ok(());
+        }
 
+        // Tentativa 2: Busca multi-candidato priorizando áudio oficial de estúdio
+        let primary_query = format!("ytsearch5:{} official audio", title);
+        let first_err = match self.run_ytdlp_attempt(title, &primary_query, &output_template).await {
+            Ok(()) => return Ok(()),
+            Err(e) => e,
+        };
+
+        // Tentativa 3 (Fallback): Busca multi-candidato ampla (Artista - Música)
+        let fallback_query = format!("ytsearch5:{}", title);
+        match self.run_ytdlp_attempt(title, &fallback_query, &output_template).await {
+            Ok(()) => Ok(()),
+            Err(second_err) => {
+                let msg1 = first_err.to_string();
+                let msg2 = second_err.to_string();
+                if msg2.contains("Sign in") || msg2.contains("ERROR:") {
+                    bail!("{}", msg2);
+                } else if msg1.contains("Sign in") || msg1.contains("ERROR:") {
+                    bail!("{}", msg1);
+                } else {
+                    bail!("Falha em todas as tentativas de busca: {} | {}", msg1, msg2);
+                }
+            }
+        }
+    }
+
+    fn urlencode(s: &str) -> String {
+        let mut encoded = String::new();
+        for b in s.bytes() {
+            match b {
+                b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                    encoded.push(b as char);
+                }
+                b' ' => encoded.push('+'),
+                _ => {
+                    encoded.push_str(&format!("%{:02X}", b));
+                }
+            }
+        }
+        encoded
+    }
+
+    async fn run_ytdlp_attempt(
+        &self,
+        title: &str,
+        search_query: &str,
+        output_template: &str,
+    ) -> Result<()> {
         let mut cmd = Command::new(&self.cfg.ytdlp_path);
         // Previne processos zumbis do yt-dlp em caso de timeout ou descarte da future (CWE-400)
         cmd.kill_on_drop(true);
@@ -63,9 +114,12 @@ impl Downloader {
             .arg(&self.cfg.audio_format)
             .arg("--audio-quality")
             .arg(&self.cfg.audio_quality)
-            .arg("--no-playlist")
+            .arg("--max-downloads")
+            .arg("1")
+            .arg("--no-abort-on-error")
+            .arg("--ignore-errors")
             .arg("-o")
-            .arg(&output_template);
+            .arg(output_template);
 
         if self.cfg.embed_metadata {
             cmd.arg("--embed-metadata");
@@ -76,6 +130,17 @@ impl Downloader {
             cmd.arg("--convert-thumbnails").arg("jpg");
         }
 
+        // Usa cliente alternativo da API (android,web) para contornar restrições etárias em streaming
+        cmd.arg("--extractor-args")
+            .arg("youtube:player_client=android,web");
+
+        // Repassa arquivo de cookies se configurado e existente
+        if let Some(ref cookies_path) = self.cfg.cookies_file {
+            if Path::new(cookies_path).exists() {
+                cmd.arg("--cookies").arg(cookies_path);
+            }
+        }
+
         // Auto-detecta JavaScript runtime suportado (Deno ou Node.js) para decifrar assinaturas do YouTube
         if Path::new("/usr/bin/deno").exists() || Path::new("/usr/local/bin/deno").exists() {
             cmd.arg("--js-runtimes").arg("deno");
@@ -83,7 +148,7 @@ impl Downloader {
             cmd.arg("--js-runtimes").arg("node");
         }
 
-        cmd.arg(&search_query);
+        cmd.arg(search_query);
 
         cmd.stdout(Stdio::null());
         cmd.stderr(Stdio::piped());
@@ -107,40 +172,39 @@ impl Downloader {
         }
 
         let status = child.wait().await?;
-        if !status.success() {
-            // Remove imediatamente sobras parciais (.webm, .webp, .part) em caso de falha
-            Self::cleanup_leftovers(title, &self.dest_dir);
+        let lines = stderr_lines.lock().await.clone();
 
-            let lines = stderr_lines.lock().await.clone();
-            // 1. Prioriza linhas contendo erro real (yt-dlp e ffmpeg usam "ERROR:")
-            let errors: Vec<String> = lines
-                .iter()
-                .filter(|l| l.contains("ERROR:") || l.contains("Error:"))
-                .cloned()
-                .collect();
-
-            let msg = if !errors.is_empty() {
-                errors.join(" | ")
-            } else {
-                // 2. Se não houver ERROR explícito, descarta WARNINGs inofensivos
-                let non_warnings: Vec<String> = lines
-                    .into_iter()
-                    .filter(|l| !l.starts_with("WARNING:") && !l.trim().is_empty())
-                    .collect();
-
-                if !non_warnings.is_empty() {
-                    non_warnings.join(" | ")
-                } else {
-                    format!("Código de saída: {:?}", status.code())
-                }
-            };
-            bail!("yt-dlp erro: {}", msg.trim());
-        }
+        // Prioriza linhas contendo erro real (yt-dlp e ffmpeg usam "ERROR:")
+        let errors: Vec<String> = lines
+            .iter()
+            .filter(|l| l.contains("ERROR:") || l.contains("Error:"))
+            .cloned()
+            .collect();
 
         // 3. Verificação Estrita de Integridade no Disco (Barreira Atômica)
-        Self::verify_file_integrity(title, &self.dest_dir)?;
-
-        Ok(())
+        match Self::verify_file_integrity(title, &self.dest_dir) {
+            Ok(()) => Ok(()),
+            Err(verify_err) => {
+                Self::cleanup_leftovers(title, &self.dest_dir);
+                // Código 101 indica que o yt-dlp encerrou devido a --max-downloads 1
+                let is_ok_exit = status.success() || status.code() == Some(101);
+                if !errors.is_empty() {
+                    bail!("yt-dlp erro: {}", errors.join(" | "));
+                } else if !is_ok_exit {
+                    let non_warnings: Vec<String> = lines
+                        .into_iter()
+                        .filter(|l| !l.starts_with("WARNING:") && !l.trim().is_empty())
+                        .collect();
+                    if !non_warnings.is_empty() {
+                        bail!("yt-dlp erro: {}", non_warnings.join(" | "));
+                    } else {
+                        bail!("Código de saída: {:?}", status.code());
+                    }
+                } else {
+                    bail!("{}", verify_err);
+                }
+            }
+        }
     }
 
     fn cleanup_leftovers(title: &str, dest_dir: &str) {
@@ -245,5 +309,22 @@ impl Downloader {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_urlencode() {
+        assert_eq!(
+            Downloader::urlencode("Roberta Flack - Making Love"),
+            "Roberta+Flack+-+Making+Love"
+        );
+        assert_eq!(
+            Downloader::urlencode("Rex Taylor - Valerie"),
+            "Rex+Taylor+-+Valerie"
+        );
     }
 }

@@ -130,6 +130,12 @@ impl Database {
             }
         }
 
+        // Limpa registros duplicados de FALHA para faixas que já existem com SUCESSO no disco
+        let _ = conn.execute(
+            "DELETE FROM historico WHERE status IN ('FALHA', 'TIMEOUT') AND LOWER(titulo) IN (SELECT LOWER(titulo) FROM historico WHERE status = 'SUCESSO')",
+            [],
+        );
+
         Ok(updated)
     }
 
@@ -224,11 +230,34 @@ impl Database {
 
     pub fn record(&self, title: &str, status: &str) -> Result<()> {
         let conn = self.get_conn()?;
-        conn.execute(
-            "INSERT INTO historico (titulo, status, baixado_em) VALUES (?1, ?2, CURRENT_TIMESTAMP)
-             ON CONFLICT(titulo) DO UPDATE SET status = excluded.status, baixado_em = CURRENT_TIMESTAMP",
-            params![title, status],
-        )?;
+
+        // Busca se já existe registro com casamento insensível a maiúsculas/minúsculas
+        let existing_id: Option<i64> = conn
+            .prepare("SELECT id FROM historico WHERE LOWER(titulo) = LOWER(?1) LIMIT 1")?
+            .query_row(params![title], |row| row.get(0))
+            .ok();
+
+        if let Some(id) = existing_id {
+            conn.execute(
+                "UPDATE historico SET titulo = ?1, status = ?2, baixado_em = CURRENT_TIMESTAMP WHERE id = ?3",
+                params![title, status, id],
+            )?;
+        } else {
+            conn.execute(
+                "INSERT INTO historico (titulo, status, baixado_em) VALUES (?1, ?2, CURRENT_TIMESTAMP)
+                 ON CONFLICT(titulo) DO UPDATE SET status = excluded.status, baixado_em = CURRENT_TIMESTAMP",
+                params![title, status],
+            )?;
+        }
+
+        // Se a faixa alcançou SUCESSO, purga qualquer registro duplicado prévio que tenha ficado como FALHA
+        if status == "SUCESSO" {
+            let _ = conn.execute(
+                "DELETE FROM historico WHERE status IN ('FALHA', 'TIMEOUT') AND LOWER(titulo) = LOWER(?1)",
+                params![title],
+            );
+        }
+
         Ok(())
     }
 
@@ -305,18 +334,17 @@ impl Database {
         Ok((total_success, total_failed, total_cached))
     }
 
-    pub fn get_recent(&self, limit: usize) -> Result<Vec<(String, String, String)>> {
+    pub fn get_all_history(&self) -> Result<Vec<(String, String, String)>> {
         let conn = self.get_conn()?;
         let mut stmt = conn.prepare(
-            "SELECT titulo, status, strftime('%H:%M:%S', baixado_em, 'localtime')
+            "SELECT titulo, status, strftime('%d/%m/%Y %H:%M:%S', baixado_em, 'localtime')
              FROM historico
-             ORDER BY id DESC
-             LIMIT ?1",
+             ORDER BY id DESC",
         )?;
-        let rows = stmt.query_map(params![limit], |row| {
+        let rows = stmt.query_map([], |row| {
             let titulo: String = row.get(0)?;
             let status: String = row.get(1)?;
-            let hora: String = row.get(2).unwrap_or_else(|_| "--:--:--".to_string());
+            let hora: String = row.get(2).unwrap_or_else(|_| "--/--/---- --:--:--".to_string());
             Ok((titulo, status, hora))
         })?;
 

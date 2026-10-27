@@ -12,14 +12,17 @@ Em vez de ripar fluxos contínuos de áudio de baixa qualidade com vinhetas cola
 
 ## Recursos Principais
 
-* **Interface Visual TUI (`ratatui`)**: Dashboard interativo no terminal exibindo a música tocando no momento, transições discretas de estado (`BAIXANDO`/`BAIXADO`), histórico recente, atalhos para faixas pendentes (`[Enter/b]` para baixar, `[r/d]` para recusar/excluir) e contadores sincronizados com o disco.
+* **Interface Visual TUI (`ratatui`)**: Dashboard interativo no terminal exibindo a música tocando no momento, transições discretas de estado (`BAIXANDO`/`BAIXADO`), histórico completo do acervo com paginação delimitada (`PageUp`/`PageDown`/`Home`/`End`), atalhos para tentar novamente faixas com erro (`[t]`), baixar pendentes (`[Enter/b]`), excluir com confirmação (`[d]`) e contadores sincronizados com o disco.
 * **Operação em Modo Duplo Inteligente**:
   * **Modo TUI Interativo**: Executado diretamente no terminal para monitoramento visual. Detecta automaticamente se o daemon do `systemd` já está ativo e opera como **Monitor** sem disparar downloads duplicados.
   * **Modo Daemon Headless (`--daemon`)**: Executado via `systemd` em background 24/7 sem renderizar interface gráfica, gerando logs estruturados no `journald`.
 * **Zero Desperdício de Banda**: Conecta ao servidor Icecast/SHOUTcast, lê apenas os primeiros bytes de metadados da faixa e fecha o socket imediatamente (~1 KB de tráfego por consulta).
 * **Deduplicação Inteligente em 2 Camadas**:
-  * **Banco SQLite Embutido**: Histórico persistente com normalização de strings (*case-insensitive* e remoção de espaços extras).
+  * **Banco SQLite Embutido**: Histórico persistente com normalização de strings (*case-insensitive* e remoção de espaços extras). Registros antigos de falha são automaticamente purgados após download com sucesso.
   * **Inspeção e Reconciliação Física no Disco**: Varredura direta no diretório de destino na inicialização, corrigindo inconsistências e garantindo que o acervo físico e o banco estejam sempre alinhados.
+* **Busca e Coleta Resiliente**:
+  * Busca direta no catálogo oficial do YouTube Music com fallback para múltiplos candidatos (`ytsearch5:`) e contorno de restrições de idade / filtros de palavras.
+  * Suporte opcional a cookies do YouTube (`cookies_file`) para faixas protegidas.
 * **Filtro de Vinhetas e Comerciais**: Expressões regulares configuráveis para descartar chamadas da emissora, propagandas ou faixas inválidas.
 * **Resiliência e Proteção contra Falhas de Extração**:
   * Conversão automática de capas WebP para JPEG antes da injeção de ID3 (evitando quebras do `ffprobe`).
@@ -65,7 +68,11 @@ radio-collector --config /caminho/meu_config.toml
 ```
 
 #### Teclas de Atalho na TUI:
-* **`↑` / `↓`** (ou **`k` / `j`**): Navega e seleciona faixas na tabela de histórico com cursor indicador (`▶`).
+* **`↑` / `↓`** (ou **`k` / `j`**): Navega e seleciona faixas na tabela de histórico com cursor indicador (`▶`). A rolagem para de forma limpa nos limites do início e do fim (sem retorno circular).
+* **`PageUp` / `PageDown`**: Pula 15 faixas para cima ou para baixo, agilizando a navegação em acervos extensos.
+* **`Home` / `End`**: Vai diretamente para a faixa mais recente (topo) ou mais antiga (final).
+* **`t`** ou **`T`**: Tenta baixar novamente a faixa com falha (`FALHA`) ou pendente (`PENDENTE`) em background, alterando o status para `BAIXANDO` e recalculando os contadores ao concluir.
+* **`Enter`** ou **`b`**: Baixa a faixa selecionada que esteja com status `PENDENTE`.
 * **`d`** ou **`Delete`**: Abre a janela modal flutuante de confirmação para excluir a música selecionada (`[S]` confirma e remove do banco/disco, `[N]` ou `Esc` cancela).
 * **`q`** ou **`Esc`**: Encerra a aplicação de forma graciosa e restaura o terminal.
 
@@ -113,6 +120,7 @@ timeout_seconds = 180                             # Tempo limite por música
 embed_metadata = true                             # Injeta tags ID3 (artista, título)
 embed_thumbnail = true                            # Injeta capa oficial do álbum
 auto_download = true                              # Baixa direto (true) ou coloca como PENDENTE (false)
+# cookies_file = "/etc/radio-collector/cookies.txt" # Opcional: arquivo de cookies para faixas com restrição de idade
 
 [filter]
 min_title_length = 4                              # Tamanho mínimo do título

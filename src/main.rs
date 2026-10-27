@@ -142,9 +142,9 @@ async fn main() -> Result<()> {
         state.total_failed = failed;
         state.total_cached = cached;
 
-        // Pré-carrega os últimos downloads do SQLite para a tabela não iniciar vazia
-        if let Ok(recent) = db.get_recent(100) {
-            for (titulo, status, hora) in recent.into_iter().rev() {
+        // Pré-carrega o acervo completo do SQLite para navegação e paginação irrestrita
+        if let Ok(all_history) = db.get_all_history() {
+            for (titulo, status, hora) in all_history.into_iter().rev() {
                 let (artist, track) = split_artist_track(&titulo);
                 let hist_status = match status.as_str() {
                     "SUCESSO" => HistoryStatus::Success,
@@ -160,12 +160,13 @@ async fn main() -> Result<()> {
                         status: hist_status,
                         artist,
                         title: track,
+                        details: None,
                     },
                 );
             }
         }
 
-        let res = run_tui(state, event_rx, Arc::clone(&db), cfg.download.clone()).await;
+        let res = run_tui(state, event_rx, event_tx.clone(), Arc::clone(&db), cfg.download.clone()).await;
         if !is_daemon_active {
             unregister_worker();
         }
