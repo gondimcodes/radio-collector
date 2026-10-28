@@ -140,7 +140,7 @@ impl Downloader {
             .arg("--no-abort-on-error")
             .arg("--ignore-errors")
             .arg("--match-filter")
-            .arg("!is_live & duration <=? 1200 & title !~= '(?i)full album|complete album|álbum completo|album completo|disco completo|compacto completo|discografia|discography|greatest hits'")
+            .arg("!is_live & duration <=? 1200 & title !~= '(?i)full album|complete album|álbum completo|album completo|disco completo|compacto completo|discografia|discography|greatest hits|você sabia|voce sabia|curiosidade|curiosidades|bastidores|podcast|entrevista|react'")
             .arg("-o")
             .arg(output_template);
 
@@ -353,7 +353,7 @@ mod tests {
 
     #[test]
     fn test_forbidden_album_titles_regex() {
-        let pattern = regex::Regex::new(r"(?i)full album|complete album|álbum completo|album completo|disco completo|compacto completo|discografia|discography|greatest hits").unwrap();
+        let pattern = regex::Regex::new(r"(?i)full album|complete album|álbum completo|album completo|disco completo|compacto completo|discografia|discography|greatest hits|você sabia|voce sabia|curiosidade|curiosidades|bastidores|podcast|entrevista|react").unwrap();
         assert!(
             pattern.is_match("Rex Taylor - My songs (1976) FULL ALBUM (Funk/soul, rock, pop, AOR)")
         );
@@ -362,6 +362,11 @@ mod tests {
         ));
         assert!(pattern.is_match("Queen - Greatest Hits (1981) [Full Album]"));
         assert!(pattern.is_match("Tim Maia - Disco Completo 1973"));
+        assert!(
+            pattern.is_match("VOCÊ SABIA??? Ele era brasileiro!!! Paul Denver - Rain and Memories")
+        );
+        assert!(pattern.is_match("Curiosidades sobre a música Paul Denver - Rain And Memories"));
+        assert!(pattern.is_match("Podcast Entrevista - Paul Denver e sua história"));
 
         assert!(!pattern.is_match("Dire Straits - Why Worry"));
         assert!(!pattern.is_match("Rex Taylor - Valerie"));

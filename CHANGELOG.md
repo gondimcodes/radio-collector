@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.3.2] - 2026-10-28
+
+### Added
+- **Anti-Commentary & Anti-Podcast Semantic Filter in `yt-dlp`**:
+  - Expanded `--match-filter` to actively reject videos containing narration, curiosity trivia, podcasts, interviews, and reaction titles (`você sabia`, `voce sabia`, `curiosidade`, `curiosidades`, `bastidores`, `podcast`, `entrevista`, `react`).
+  - Guarantees that fallback queries on standard YouTube select official studio recordings and clean vinyl rips instead of community commentary videos with voiceovers.
+- **Automated Regression Tests**:
+  - Expanded `test_forbidden_album_titles_regex` in `src/downloader.rs` to validate automatic rejection of commentary/trivia video titles.
+
+---
+
 ## [1.3.1] - 2026-10-27
 
 ### Fixed
