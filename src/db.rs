@@ -181,13 +181,24 @@ impl Database {
         if dest_path.exists() {
             if let Ok(entries) = fs::read_dir(dest_path) {
                 for entry in entries.flatten() {
-                    let fname = entry.file_name().to_string_lossy().to_string();
-                    let norm_fname = Self::normalize(&fname);
-                    let is_match = norm_fname.ends_with(".mp3")
-                        && ((!artist_part.is_empty()
+                    let path = entry.path();
+                    let is_mp3 = path
+                        .extension()
+                        .is_some_and(|ext| ext.eq_ignore_ascii_case("mp3"));
+                    if !is_mp3 {
+                        continue;
+                    }
+
+                    let file_stem = path
+                        .file_stem()
+                        .map(|s| s.to_string_lossy().to_string())
+                        .unwrap_or_default();
+                    let norm_fname = Self::normalize(&file_stem);
+                    let is_match = norm_fname == norm_full_title
+                        || (!artist_part.is_empty()
+                            && !track_part.is_empty()
                             && norm_fname.contains(&artist_part)
-                            && norm_fname.contains(&track_part))
-                            || norm_fname.contains(&norm_full_title));
+                            && norm_fname.contains(&track_part));
                     if is_match {
                         let _ = self.record(title, "SUCESSO");
                         return Ok(true);
@@ -264,45 +275,52 @@ impl Database {
     }
 
     pub fn delete_track_record_only(&self, title: &str) -> Result<()> {
-        let norm_title = Self::normalize(title);
         let conn = self.get_conn()?;
-        conn.execute(
-            "DELETE FROM historico WHERE LOWER(titulo) = ?1",
-            params![norm_title],
+        let norm = Self::normalize(title);
+        let affected = conn.execute(
+            "DELETE FROM historico WHERE LOWER(titulo) = LOWER(?1) OR titulo = ?1",
+            params![title],
         )?;
+        if affected == 0 {
+            let mut stmt = conn.prepare("SELECT id, titulo FROM historico")?;
+            let rows: Vec<(i64, String)> = stmt
+                .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+                .filter_map(|r| r.ok())
+                .collect();
+            for (id, db_title) in rows {
+                if Self::normalize(&db_title) == norm {
+                    let _ = conn.execute("DELETE FROM historico WHERE id = ?1", params![id]);
+                }
+            }
+        }
         Ok(())
     }
 
     pub fn delete_track(&self, title: &str, dest_dir: &str) -> Result<()> {
-        let norm_title = Self::normalize(title);
-        let conn = self.get_conn()?;
-        conn.execute(
-            "DELETE FROM historico WHERE LOWER(titulo) = ?1",
-            params![norm_title],
-        )?;
+        self.delete_track_record_only(title)?;
 
-        // Remove arquivos .mp3 correspondentes com validação estrita de Artista + Música
-        let parts: Vec<&str> = title.splitn(2, '-').collect();
-        let (artist_part, track_part) = if parts.len() == 2 {
-            (Self::normalize(parts[0]), Self::normalize(parts[1]))
-        } else {
-            (String::new(), Self::normalize(title))
-        };
         let norm_full_title = Self::normalize(title);
-
         let dest_path = Path::new(dest_dir);
         if dest_path.exists() {
             if let Ok(entries) = fs::read_dir(dest_path) {
                 for entry in entries.flatten() {
-                    let fname = entry.file_name().to_string_lossy().to_string();
-                    let norm_fname = Self::normalize(&fname);
-                    let is_match = norm_fname.ends_with(".mp3")
-                        && ((!artist_part.is_empty()
-                            && norm_fname.contains(&artist_part)
-                            && norm_fname.contains(&track_part))
-                            || norm_fname.contains(&norm_full_title));
-                    if is_match {
-                        let _ = fs::remove_file(entry.path());
+                    let path = entry.path();
+                    let is_mp3 = path
+                        .extension()
+                        .is_some_and(|ext| ext.eq_ignore_ascii_case("mp3"));
+                    if !is_mp3 {
+                        continue;
+                    }
+
+                    let file_stem = path
+                        .file_stem()
+                        .map(|s| s.to_string_lossy().to_string())
+                        .unwrap_or_default();
+                    let norm_stem = Self::normalize(&file_stem);
+
+                    // Deleta apenas se coincidir com o título normalizado ou título exato
+                    if norm_stem == norm_full_title || file_stem.eq_ignore_ascii_case(title) {
+                        let _ = fs::remove_file(&path);
                     }
                 }
             }
@@ -383,5 +401,49 @@ impl Database {
             }
         }
         result.split_whitespace().collect::<Vec<_>>().join(" ")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_delete_track_and_physical_file() {
+        let unique = format!(
+            "test_db_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let temp_dir = std::env::temp_dir().join(&unique);
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        let db_path = temp_dir.join("test.db");
+        let db = Database::open(db_path.to_str().unwrap()).unwrap();
+
+        let track_title = "Nikka Costa - (Out Here) On My Own";
+        db.record(track_title, "SUCESSO").unwrap();
+
+        // Cria o arquivo físico simulado .mp3 no diretório
+        let mp3_path = temp_dir.join(format!("{}.mp3", track_title));
+        fs::write(&mp3_path, b"dummy audio content").unwrap();
+        assert!(mp3_path.exists());
+
+        // Valida que delete_track remove do banco e do disco
+        db.delete_track(track_title, temp_dir.to_str().unwrap())
+            .unwrap();
+
+        assert!(
+            !mp3_path.exists(),
+            "O arquivo mp3 deve ser deletado do disco"
+        );
+
+        let stats = db.get_stats().unwrap();
+        assert_eq!(stats.0, 0, "Registro deve ter sido removido do SQLite");
+
+        // Limpeza
+        let _ = fs::remove_dir_all(&temp_dir);
     }
 }

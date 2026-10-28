@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.3.1] - 2026-10-27
+
+### Fixed
+- **Atomic Deletion in SQLite and Filesystem (`Database::delete_track`)**:
+  - Fixed a logic bug where `Database::delete_track` was passing an overly normalized title string (with hyphens and parentheses stripped) to `WHERE LOWER(titulo) = ?1`, causing 0 records to be deleted from SQLite.
+  - Fixed physical file deletion where `Database::normalize(&fname)` converted the file extension dot `.` into a space, permanently failing the `.ends_with(".mp3")` check and leaving the physical MP3 file untouched on disk.
+  - Refactored `delete_track` and `delete_track_record_only` to perform exact case-insensitive matches (`LOWER(titulo) = LOWER(?1) OR titulo = ?1`) with normalized fallback, and to inspect physical file stems and extensions accurately via `path.extension()` and `path.file_stem()`.
+  - Fixed filesystem deduplication check in `Database::is_already_downloaded` to properly check `.mp3` extension on paths instead of normalized filenames.
+- **TUI Header and Footer Synchronization**:
+  - Ensured that deleting a track via `[d]` immediately updates both the in-memory/table count (header) and the physical on-disk atomic counter (footer `Total MP3`) in lockstep.
+- **Automated Regression Tests**:
+  - Added dedicated unit test `test_delete_track_and_physical_file` in [`src/db.rs`](file:///home/gondim/projetos/radio-collector/src/db.rs) validating concurrent SQLite row removal and physical file unlinking.
+
+---
+
 ## [1.3.0] - 2026-10-27
 
 ### Added
