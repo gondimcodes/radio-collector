@@ -11,8 +11,9 @@ pub struct Database {
 impl Database {
     pub fn open(path: &str) -> Result<Self> {
         if let Some(parent) = Path::new(path).parent() {
-            fs::create_dir_all(parent)
-                .with_context(|| format!("Falha ao criar diretório para banco SQLite: {:?}", parent))?;
+            fs::create_dir_all(parent).with_context(|| {
+                format!("Falha ao criar diretório para banco SQLite: {:?}", parent)
+            })?;
         }
 
         let conn = Connection::open(path)
@@ -66,7 +67,10 @@ impl Database {
         if let Ok(entries) = fs::read_dir(dest_path) {
             for entry in entries.flatten() {
                 let path = entry.path();
-                if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("mp3")) {
+                if path
+                    .extension()
+                    .is_some_and(|e| e.eq_ignore_ascii_case("mp3"))
+                {
                     if let Ok(meta) = path.metadata() {
                         if meta.len() >= 500 * 1024 {
                             let file_stem = path
@@ -77,13 +81,10 @@ impl Database {
 
                             let norm_stem = Self::normalize(&file_stem);
 
-                            let mut stmt = conn.prepare(
-                                "SELECT id, titulo, status FROM historico"
-                            )?;
+                            let mut stmt =
+                                conn.prepare("SELECT id, titulo, status FROM historico")?;
                             let rows: Vec<(i64, String, String)> = stmt
-                                .query_map([], |row| {
-                                    Ok((row.get(0)?, row.get(1)?, row.get(2)?))
-                                })?
+                                .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
                                 .flatten()
                                 .collect();
 
@@ -152,7 +153,8 @@ impl Database {
         // 1. Checagem no banco de dados SQLite (comparações exatas e normalizadas para SUCESSO ou PENDENTE)
         {
             let conn = self.get_conn()?;
-            let mut stmt = conn.prepare("SELECT titulo FROM historico WHERE status IN ('SUCESSO', 'PENDENTE')")?;
+            let mut stmt = conn
+                .prepare("SELECT titulo FROM historico WHERE status IN ('SUCESSO', 'PENDENTE')")?;
             let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
             for r in rows.flatten() {
                 let db_norm = Self::normalize(&r);
@@ -344,7 +346,9 @@ impl Database {
         let rows = stmt.query_map([], |row| {
             let titulo: String = row.get(0)?;
             let status: String = row.get(1)?;
-            let hora: String = row.get(2).unwrap_or_else(|_| "--/--/---- --:--:--".to_string());
+            let hora: String = row
+                .get(2)
+                .unwrap_or_else(|_| "--/--/---- --:--:--".to_string());
             Ok((titulo, status, hora))
         })?;
 
@@ -359,10 +363,14 @@ impl Database {
         let mut result = String::with_capacity(s.len());
         for c in s.chars() {
             match c {
-                'á' | 'à' | 'ã' | 'â' | 'ä' | 'Á' | 'À' | 'Ã' | 'Â' | 'Ä' => result.push('a'),
+                'á' | 'à' | 'ã' | 'â' | 'ä' | 'Á' | 'À' | 'Ã' | 'Â' | 'Ä' => {
+                    result.push('a')
+                }
                 'é' | 'è' | 'ê' | 'ë' | 'É' | 'È' | 'Ê' | 'Ë' => result.push('e'),
                 'í' | 'ì' | 'î' | 'ï' | 'Í' | 'Ì' | 'Î' | 'Ï' => result.push('i'),
-                'ó' | 'ò' | 'õ' | 'ô' | 'ö' | 'Ó' | 'Ò' | 'Õ' | 'Ô' | 'Ö' => result.push('o'),
+                'ó' | 'ò' | 'õ' | 'ô' | 'ö' | 'Ó' | 'Ò' | 'Õ' | 'Ô' | 'Ö' => {
+                    result.push('o')
+                }
                 'ú' | 'ù' | 'û' | 'ü' | 'Ú' | 'Ù' | 'Û' | 'Ü' => result.push('u'),
                 'ç' | 'Ç' => result.push('c'),
                 '&' => result.push_str(" e "),

@@ -12,7 +12,7 @@ Rather than ripping continuous, lossy radio audio streams riddled with station j
 
 ## Key Features
 
-* **Interactive Terminal UI (`ratatui`)**: Real-time terminal dashboard featuring current track monitoring, discrete state transitions, complete catalog history with bounded pagination (`PageUp`/`PageDown`/`Home`/`End`), interactive retry for failed tracks (`[t]`), manual download of pending items (`[Enter/b]`), deletion modals (`[d]`), and filesystem-synchronized counters.
+* **Interactive Terminal UI (`ratatui`)**: Real-time terminal dashboard featuring current track monitoring, discrete state transitions, complete catalog history with bounded pagination (`PageUp`/`PageDown`/`Home`/`End`), live search and filtering by artist/title (`/` or `f`), interactive retry for failed tracks (`[t]`), manual download of pending items (`[Enter/b]`), deletion modals (`[d]`), and filesystem-synchronized counters.
 * **Smart Dual-Mode Architecture**:
   * **Interactive TUI Mode**: Ran directly in the terminal for monitoring and management. Automatically detects if the background `systemd` daemon is running and enters **Monitor Mode** without firing duplicate downloads.
   * **Headless Daemon Mode (`--daemon`)**: Runs 24/7 in the background via `systemd` without rendering a UI, producing structured logs directly to `journald`.
@@ -20,8 +20,10 @@ Rather than ripping continuous, lossy radio audio streams riddled with station j
 * **2-Tier Intelligent Deduplication**:
   * **Embedded SQLite Database**: Persistent history with case-insensitive normalization and whitespace stripping (WAL mode). Obsolete failure records are automatically purged upon successful download.
   * **Physical Filesystem Reconciliation**: Automatically inspects destination directories on startup to heal database records and prevent redundant downloads.
-* **Resilient Search & Retrieval**:
-  * Direct YouTube Music catalog search with multi-candidate fallback (`ytsearch5:`) and age-gate bypass mechanisms.
+* **Resilient Search & Multi-Stage Retrieval**:
+  * Direct YouTube Music catalog search pinned strictly to official single masters (`#songs` section) with multi-candidate fallback (`ytsearch5:`) and age-gate bypass mechanisms.
+  * Active anti-album and anti-compilation match filter (`--match-filter`) with a 20-minute ceiling, skipping full albums, vinyl compacts, and multi-hour live concerts.
+  * Expansion protection (`--no-playlist`) preventing downloads of entire matching playlists or collections.
   * Optional YouTube cookies support (`cookies_file`) for restricted tracks.
 * **Configurable Station Filter**: Customizable regex patterns to identify and discard promos, ads, station IDs, and invalid titles.
 * **Extraction Resilience & Failure Safeguards**:
@@ -71,6 +73,8 @@ radio-collector --config /path/to/custom_config.toml
 * **`↑` / `↓`** (or **`k` / `j`**): Navigate and select tracks in the history table with the cursor indicator (`▶`). Scrolling stops cleanly at table boundaries (no circular looping).
 * **`PageUp` / `PageDown`**: Jump 15 tracks up or down for fast library navigation.
 * **`Home` / `End`**: Jump directly to the newest (top) or oldest (bottom) track.
+* **`/`** or **`f`** / **`F`**: Open interactive search modal to filter track history by artist or song title in real time.
+* **`c`** or **`C`**: Clear active search filter and restore full catalog view.
 * **`t`** or **`T`**: Retry downloading the selected failed (`FALHA`) or pending (`PENDENTE`) track immediately in the background. Automatically updates status to `BAIXANDO` and reconciles counters upon completion.
 * **`Enter`** or **`b`**: Download the selected pending (`PENDENTE`) track.
 * **`d`** or **`Delete`**: Open floating confirmation modal to safely delete the selected track from both SQLite and the filesystem (`[S]` confirms deletion, `[N]` or `Esc` cancels).

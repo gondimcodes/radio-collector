@@ -145,6 +145,9 @@ mod tests {
         assert!(cfg.embed_metadata);
         assert!(cfg.embed_thumbnail);
         assert!(cfg.auto_download);
-        assert_eq!(cfg.cookies_file, Some("/etc/radio-collector/cookies.txt".to_string()));
+        assert_eq!(
+            cfg.cookies_file,
+            Some("/etc/radio-collector/cookies.txt".to_string())
+        );
     }
 }

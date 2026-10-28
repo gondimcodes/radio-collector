@@ -38,6 +38,8 @@ pub struct TuiState {
     pub total_cached: usize,
     pub total_ignored: usize,
     pub total_failed: usize,
+    pub search_query: String,
+    pub search_mode: bool,
 }
 
 impl TuiState {
@@ -62,6 +64,27 @@ impl TuiState {
             total_cached: 0,
             total_ignored: 0,
             total_failed: 0,
+            search_query: String::new(),
+            search_mode: false,
+        }
+    }
+
+    pub fn filtered_indices(&self) -> Vec<usize> {
+        if self.search_query.trim().is_empty() {
+            (0..self.history.len()).collect()
+        } else {
+            let q = Database::normalize(&self.search_query);
+            self.history
+                .iter()
+                .enumerate()
+                .filter(|(_, item)| {
+                    let full = Database::normalize(&item.clean_full_title());
+                    let art = Database::normalize(&item.artist);
+                    let tra = Database::normalize(&item.title);
+                    full.contains(&q) || art.contains(&q) || tra.contains(&q)
+                })
+                .map(|(idx, _)| idx)
+                .collect()
         }
     }
 
@@ -74,10 +97,11 @@ impl TuiState {
     }
 
     pub fn next_row(&mut self) {
-        if self.history.is_empty() {
+        let indices = self.filtered_indices();
+        if indices.is_empty() {
             return;
         }
-        let last = self.history.len().saturating_sub(1);
+        let last = indices.len().saturating_sub(1);
         let i = match self.table_state.selected() {
             Some(i) => (i + 1).min(last),
             None => 0,
@@ -86,7 +110,8 @@ impl TuiState {
     }
 
     pub fn previous_row(&mut self) {
-        if self.history.is_empty() {
+        let indices = self.filtered_indices();
+        if indices.is_empty() {
             return;
         }
         let i = match self.table_state.selected() {
@@ -97,16 +122,18 @@ impl TuiState {
     }
 
     pub fn page_down(&mut self, step: usize) {
-        if self.history.is_empty() {
+        let indices = self.filtered_indices();
+        if indices.is_empty() {
             return;
         }
         let current = self.table_state.selected().unwrap_or(0);
-        let next = (current + step).min(self.history.len() - 1);
+        let next = (current + step).min(indices.len() - 1);
         self.table_state.select(Some(next));
     }
 
     pub fn page_up(&mut self, step: usize) {
-        if self.history.is_empty() {
+        let indices = self.filtered_indices();
+        if indices.is_empty() {
             return;
         }
         let current = self.table_state.selected().unwrap_or(0);
@@ -115,36 +142,41 @@ impl TuiState {
     }
 
     pub fn first_row(&mut self) {
-        if !self.history.is_empty() {
+        let indices = self.filtered_indices();
+        if !indices.is_empty() {
             self.table_state.select(Some(0));
         }
     }
 
     pub fn last_row(&mut self) {
-        if !self.history.is_empty() {
-            self.table_state.select(Some(self.history.len() - 1));
+        let indices = self.filtered_indices();
+        if !indices.is_empty() {
+            self.table_state.select(Some(indices.len() - 1));
         }
     }
 
     pub fn request_action_or_delete(&mut self) {
+        let indices = self.filtered_indices();
         if let Some(i) = self.table_state.selected() {
-            if i < self.history.len() {
-                let item = &self.history[i];
-                if item.status == HistoryStatus::Pending {
-                    self.pending_action =
-                        Some((i, item.clean_full_title()));
-                } else if item.status == HistoryStatus::Success || item.status == HistoryStatus::Failed {
-                    self.pending_delete =
-                        Some((i, item.clean_full_title()));
+            if let Some(&real_idx) = indices.get(i) {
+                if real_idx < self.history.len() {
+                    let item = &self.history[real_idx];
+                    if item.status == HistoryStatus::Pending {
+                        self.pending_action = Some((real_idx, item.clean_full_title()));
+                    } else if item.status == HistoryStatus::Success
+                        || item.status == HistoryStatus::Failed
+                    {
+                        self.pending_delete = Some((real_idx, item.clean_full_title()));
+                    }
                 }
             }
         }
     }
 
     pub fn confirm_delete(&mut self, db: &Database) {
-        if let Some((i, _)) = self.pending_delete.take() {
-            if i < self.history.len() {
-                let item = self.history.remove(i);
+        if let Some((real_idx, _)) = self.pending_delete.take() {
+            if real_idx < self.history.len() {
+                let item = self.history.remove(real_idx);
                 let full_title = item.clean_full_title();
                 let _ = db.delete_track(&full_title, &self.output_dir);
                 if item.status == HistoryStatus::Success && self.total_success > 0 {
@@ -152,10 +184,13 @@ impl TuiState {
                 } else if item.status == HistoryStatus::Failed && self.total_failed > 0 {
                     self.total_failed -= 1;
                 }
-                if self.history.is_empty() {
+                let indices = self.filtered_indices();
+                if indices.is_empty() {
                     self.table_state.select(None);
-                } else if i >= self.history.len() {
-                    self.table_state.select(Some(self.history.len() - 1));
+                } else if let Some(sel) = self.table_state.selected() {
+                    if sel >= indices.len() {
+                        self.table_state.select(Some(indices.len() - 1));
+                    }
                 }
             }
         }
@@ -189,9 +224,8 @@ impl TuiState {
             CollectorEvent::TrackPending { title } => {
                 let (artist, track) = split_artist_track(&title);
                 let norm_full = Database::normalize(&title);
-                self.history.retain(|item| {
-                    Database::normalize(&item.clean_full_title()) != norm_full
-                });
+                self.history
+                    .retain(|item| Database::normalize(&item.clean_full_title()) != norm_full);
                 self.push_history(TrackHistoryItem {
                     time: now,
                     status: HistoryStatus::Pending,
@@ -206,9 +240,8 @@ impl TuiState {
                 let (artist, track) = split_artist_track(&title);
                 let norm_full = Database::normalize(&title);
                 // Insere ou atualiza o item no topo do histórico com status BAIXANDO
-                self.history.retain(|item| {
-                    Database::normalize(&item.clean_full_title()) != norm_full
-                });
+                self.history
+                    .retain(|item| Database::normalize(&item.clean_full_title()) != norm_full);
                 self.push_history(TrackHistoryItem {
                     time: now,
                     status: HistoryStatus::Downloading,
@@ -217,7 +250,11 @@ impl TuiState {
                     details: None,
                 });
             }
-            CollectorEvent::DownloadFinished { title, success, message } => {
+            CollectorEvent::DownloadFinished {
+                title,
+                success,
+                message,
+            } => {
                 self.active_download = None;
                 let (artist, track) = split_artist_track(&title);
                 let norm_artist = Database::normalize(&artist);
@@ -235,7 +272,8 @@ impl TuiState {
                 if success {
                     self.total_success += 1;
                     let had_failure = self.history.iter().any(|item| {
-                        (item.status == HistoryStatus::Failed || item.status == HistoryStatus::Downloading)
+                        (item.status == HistoryStatus::Failed
+                            || item.status == HistoryStatus::Downloading)
                             && is_matching(item)
                     });
                     if had_failure && self.total_failed > 0 {
@@ -330,24 +368,50 @@ pub async fn run_tui(
         // 3. Captura teclado de forma não-bloqueante
         if event::poll(Duration::from_millis(50))? {
             if let Event::Key(key) = event::read()? {
-                if state.pending_action.is_some() {
+                if state.search_mode {
+                    match key.code {
+                        KeyCode::Enter => {
+                            state.search_mode = false;
+                        }
+                        KeyCode::Esc => {
+                            state.search_query.clear();
+                            state.search_mode = false;
+                            state.table_state.select(Some(0));
+                        }
+                        KeyCode::Backspace => {
+                            state.search_query.pop();
+                            state.table_state.select(Some(0));
+                        }
+                        KeyCode::Char(c) => {
+                            state.search_query.push(c);
+                            state.table_state.select(Some(0));
+                        }
+                        _ => {}
+                    }
+                } else if state.pending_action.is_some() {
                     match key.code {
                         KeyCode::Char('b') | KeyCode::Char('B') | KeyCode::Enter => {
                             // Baixar faixa pendente
                             if let Some((idx, full_title)) = state.pending_action.take() {
                                 if idx < state.history.len() {
                                     state.history[idx].status = HistoryStatus::Downloading;
-                                    state.history[idx].time = chrono::Local::now().format("%d/%m/%Y %H:%M:%S").to_string();
+                                    state.history[idx].time = chrono::Local::now()
+                                        .format("%d/%m/%Y %H:%M:%S")
+                                        .to_string();
                                     let db_clone = Arc::clone(&db);
                                     let dl_clone = Arc::clone(&downloader);
                                     let title_clone = full_title.clone();
                                     let tx_clone = event_tx.clone();
                                     tokio::spawn(async move {
-                                        let _ = db_clone.record_event("DOWNLOAD_START", &title_clone);
+                                        let _ =
+                                            db_clone.record_event("DOWNLOAD_START", &title_clone);
                                         match dl_clone.download(&title_clone).await {
                                             Ok(()) => {
                                                 let _ = db_clone.record(&title_clone, "SUCESSO");
-                                                let _ = db_clone.record_event("DOWNLOAD_FINISH", &format!("OK|{}", title_clone));
+                                                let _ = db_clone.record_event(
+                                                    "DOWNLOAD_FINISH",
+                                                    &format!("OK|{}", title_clone),
+                                                );
                                                 let _ = tx_clone
                                                     .send(CollectorEvent::DownloadFinished {
                                                         title: title_clone,
@@ -359,7 +423,10 @@ pub async fn run_tui(
                                             Err(e) => {
                                                 let err_msg = e.to_string();
                                                 let _ = db_clone.record(&title_clone, "FALHA");
-                                                let _ = db_clone.record_event("DOWNLOAD_FINISH", &format!("ERR|{}|{}", err_msg, title_clone));
+                                                let _ = db_clone.record_event(
+                                                    "DOWNLOAD_FINISH",
+                                                    &format!("ERR|{}|{}", err_msg, title_clone),
+                                                );
                                                 let _ = tx_clone
                                                     .send(CollectorEvent::DownloadFinished {
                                                         title: title_clone,
@@ -379,10 +446,13 @@ pub async fn run_tui(
                                 if idx < state.history.len() {
                                     state.history.remove(idx);
                                     let _ = db.delete_track_record_only(&full_title);
-                                    if state.history.is_empty() {
+                                    let indices = state.filtered_indices();
+                                    if indices.is_empty() {
                                         state.table_state.select(None);
-                                    } else if idx >= state.history.len() {
-                                        state.table_state.select(Some(state.history.len() - 1));
+                                    } else if let Some(sel) = state.table_state.selected() {
+                                        if sel >= indices.len() {
+                                            state.table_state.select(Some(indices.len() - 1));
+                                        }
                                     }
                                 }
                             }
@@ -401,16 +471,29 @@ pub async fn run_tui(
                         | KeyCode::Enter => {
                             state.confirm_delete(&db);
                         }
-                        KeyCode::Char('n')
-                        | KeyCode::Char('N')
-                        | KeyCode::Esc => {
+                        KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
                             state.cancel_action_or_delete();
                         }
                         _ => {}
                     }
                 } else {
                     match key.code {
-                        KeyCode::Char('q') | KeyCode::Esc => break,
+                        KeyCode::Char('q') => break,
+                        KeyCode::Esc => {
+                            if !state.search_query.is_empty() {
+                                state.search_query.clear();
+                                state.table_state.select(Some(0));
+                            } else {
+                                break;
+                            }
+                        }
+                        KeyCode::Char('/') | KeyCode::Char('f') | KeyCode::Char('F') => {
+                            state.search_mode = true;
+                        }
+                        KeyCode::Char('c') | KeyCode::Char('C') => {
+                            state.search_query.clear();
+                            state.table_state.select(Some(0));
+                        }
                         KeyCode::Up | KeyCode::Char('k') => state.previous_row(),
                         KeyCode::Down | KeyCode::Char('j') => state.next_row(),
                         KeyCode::PageUp => state.page_up(15),
@@ -418,61 +501,95 @@ pub async fn run_tui(
                         KeyCode::Home => state.first_row(),
                         KeyCode::End => state.last_row(),
                         KeyCode::Char('b') | KeyCode::Char('B') | KeyCode::Enter => {
+                            let indices = state.filtered_indices();
                             if let Some(i) = state.table_state.selected() {
-                                if i < state.history.len() && state.history[i].status == HistoryStatus::Pending {
-                                    state.request_action_or_delete();
+                                if let Some(&real_idx) = indices.get(i) {
+                                    if real_idx < state.history.len()
+                                        && state.history[real_idx].status == HistoryStatus::Pending
+                                    {
+                                        state.request_action_or_delete();
+                                    }
                                 }
                             }
                         }
                         KeyCode::Char('r') | KeyCode::Char('R') => {
+                            let indices = state.filtered_indices();
                             if let Some(i) = state.table_state.selected() {
-                                if i < state.history.len() && state.history[i].status == HistoryStatus::Pending {
-                                    state.request_action_or_delete();
+                                if let Some(&real_idx) = indices.get(i) {
+                                    if real_idx < state.history.len()
+                                        && state.history[real_idx].status == HistoryStatus::Pending
+                                    {
+                                        state.request_action_or_delete();
+                                    }
                                 }
                             }
                         }
                         KeyCode::Char('t') | KeyCode::Char('T') => {
+                            let indices = state.filtered_indices();
                             if let Some(i) = state.table_state.selected() {
-                                if i < state.history.len() {
-                                    let item = &state.history[i];
-                                    if item.status == HistoryStatus::Failed || item.status == HistoryStatus::Pending {
-                                        let full_title = item.clean_full_title();
-                                        state.history[i].status = HistoryStatus::Downloading;
-                                        state.history[i].time = chrono::Local::now().format("%d/%m/%Y %H:%M:%S").to_string();
-                                        state.history[i].details = None;
+                                if let Some(&real_idx) = indices.get(i) {
+                                    if real_idx < state.history.len() {
+                                        let item = &state.history[real_idx];
+                                        if item.status == HistoryStatus::Failed
+                                            || item.status == HistoryStatus::Pending
+                                        {
+                                            let full_title = item.clean_full_title();
+                                            state.history[real_idx].status =
+                                                HistoryStatus::Downloading;
+                                            state.history[real_idx].time = chrono::Local::now()
+                                                .format("%d/%m/%Y %H:%M:%S")
+                                                .to_string();
+                                            state.history[real_idx].details = None;
 
-                                        let db_clone = Arc::clone(&db);
-                                        let dl_clone = Arc::clone(&downloader);
-                                        let title_clone = full_title.clone();
-                                        let tx_clone = event_tx.clone();
-                                        tokio::spawn(async move {
-                                            let _ = db_clone.record_event("DOWNLOAD_START", &title_clone);
-                                            match dl_clone.download(&title_clone).await {
-                                                Ok(()) => {
-                                                    let _ = db_clone.record(&title_clone, "SUCESSO");
-                                                    let _ = db_clone.record_event("DOWNLOAD_FINISH", &format!("OK|{}", title_clone));
-                                                    let _ = tx_clone
-                                                        .send(CollectorEvent::DownloadFinished {
-                                                            title: title_clone,
-                                                            success: true,
-                                                            message: "OK".to_string(),
-                                                        })
-                                                        .await;
+                                            let db_clone = Arc::clone(&db);
+                                            let dl_clone = Arc::clone(&downloader);
+                                            let title_clone = full_title.clone();
+                                            let tx_clone = event_tx.clone();
+                                            tokio::spawn(async move {
+                                                let _ = db_clone
+                                                    .record_event("DOWNLOAD_START", &title_clone);
+                                                match dl_clone.download(&title_clone).await {
+                                                    Ok(()) => {
+                                                        let _ = db_clone
+                                                            .record(&title_clone, "SUCESSO");
+                                                        let _ = db_clone.record_event(
+                                                            "DOWNLOAD_FINISH",
+                                                            &format!("OK|{}", title_clone),
+                                                        );
+                                                        let _ = tx_clone
+                                                            .send(
+                                                                CollectorEvent::DownloadFinished {
+                                                                    title: title_clone,
+                                                                    success: true,
+                                                                    message: "OK".to_string(),
+                                                                },
+                                                            )
+                                                            .await;
+                                                    }
+                                                    Err(e) => {
+                                                        let err_msg = e.to_string();
+                                                        let _ =
+                                                            db_clone.record(&title_clone, "FALHA");
+                                                        let _ = db_clone.record_event(
+                                                            "DOWNLOAD_FINISH",
+                                                            &format!(
+                                                                "ERR|{}|{}",
+                                                                err_msg, title_clone
+                                                            ),
+                                                        );
+                                                        let _ = tx_clone
+                                                            .send(
+                                                                CollectorEvent::DownloadFinished {
+                                                                    title: title_clone,
+                                                                    success: false,
+                                                                    message: err_msg,
+                                                                },
+                                                            )
+                                                            .await;
+                                                    }
                                                 }
-                                                Err(e) => {
-                                                    let err_msg = e.to_string();
-                                                    let _ = db_clone.record(&title_clone, "FALHA");
-                                                    let _ = db_clone.record_event("DOWNLOAD_FINISH", &format!("ERR|{}|{}", err_msg, title_clone));
-                                                    let _ = tx_clone
-                                                        .send(CollectorEvent::DownloadFinished {
-                                                            title: title_clone,
-                                                            success: false,
-                                                            message: err_msg,
-                                                        })
-                                                        .await;
-                                                }
-                                            }
-                                        });
+                                            });
+                                        }
                                     }
                                 }
                             }
@@ -497,9 +614,9 @@ fn render_ui(f: &mut Frame, state: &mut TuiState) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(5),  // Header / Status da Conexão / Now Playing
-            Constraint::Min(8),     // Histórico Tabela
-            Constraint::Length(3),  // Footer / Status
+            Constraint::Length(5), // Header / Status da Conexão / Now Playing
+            Constraint::Min(8),    // Histórico Tabela
+            Constraint::Length(3), // Footer / Status
         ])
         .split(f.area());
 
@@ -507,12 +624,20 @@ fn render_ui(f: &mut Frame, state: &mut TuiState) {
     let (bullet_color, status_badge) = if state.stream_connected {
         (
             Color::Green,
-            Span::styled("● CONECTADO", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "● CONECTADO",
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            ),
         )
     } else {
         (
             Color::Red,
-            Span::styled("● SEM SINAL", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "● SEM SINAL",
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            ),
         )
     };
 
@@ -537,12 +662,17 @@ fn render_ui(f: &mut Frame, state: &mut TuiState) {
             Span::raw(" Tocando Agora: "),
             Span::styled(
                 &state.current_track,
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
             ),
         ]),
     ];
 
-    let header_title = format!(" Radio Collector v{} [Rust + Ratatui] ", env!("CARGO_PKG_VERSION"));
+    let header_title = format!(
+        " Radio Collector v{} [Rust + Ratatui] ",
+        env!("CARGO_PKG_VERSION")
+    );
     let header = Paragraph::new(header_lines).block(
         Block::default()
             .borders(Borders::ALL)
@@ -552,20 +682,21 @@ fn render_ui(f: &mut Frame, state: &mut TuiState) {
     f.render_widget(header, chunks[0]);
 
     // 2. Tabela de Histórico Interativa
-    let rows: Vec<Row> = state
-        .history
+    let indices = state.filtered_indices();
+    let rows: Vec<Row> = indices
         .iter()
-        .map(|item| {
+        .map(|&idx| {
+            let item = &state.history[idx];
             let status_style = match item.status {
-                HistoryStatus::Pending => {
-                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
-                }
-                HistoryStatus::Downloading => {
-                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
-                }
-                HistoryStatus::Success => {
-                    Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
-                }
+                HistoryStatus::Pending => Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+                HistoryStatus::Downloading => Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+                HistoryStatus::Success => Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
                 HistoryStatus::Cached => Style::default().fg(Color::Blue),
                 HistoryStatus::Ignored => Style::default().fg(Color::DarkGray),
                 HistoryStatus::Failed => {
@@ -581,6 +712,20 @@ fn render_ui(f: &mut Frame, state: &mut TuiState) {
             ])
         })
         .collect();
+
+    let table_title = if !state.search_query.is_empty() {
+        format!(
+            " Histórico de Faixas [Filtro: \"{}\"] ({} de {} faixas | [/] Alterar | 'c' Limpar) ",
+            state.search_query,
+            indices.len(),
+            state.history.len()
+        )
+    } else {
+        format!(
+            " Histórico de Faixas ({} faixas | ↑/↓ Navegar | [/] Buscar | 't' Tentar | 'd' Excluir) ",
+            state.history.len()
+        )
+    };
 
     let table = Table::new(
         rows,
@@ -598,11 +743,7 @@ fn render_ui(f: &mut Frame, state: &mut TuiState) {
                 .add_modifier(Modifier::BOLD),
         ),
     )
-    .block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title(" Histórico de Faixas (↑/↓ Navegar | PgUp/PgDn Paginar | 't' Tentar Novamente | 'd' Excluir) "),
-    )
+    .block(Block::default().borders(Borders::ALL).title(table_title))
     .row_highlight_style(
         Style::default()
             .bg(Color::Rgb(35, 50, 80))
@@ -616,9 +757,14 @@ fn render_ui(f: &mut Frame, state: &mut TuiState) {
     // 3. Footer com Atalhos Interativos e Contagem Físico-Atômica do Acervo
     let total_disco = count_mp3_files(&state.output_dir);
 
+    let filter_info = if !state.search_query.is_empty() {
+        format!(" | [Filtro: \"{}\" - 'c' limpa]", state.search_query)
+    } else {
+        String::new()
+    };
     let footer_text = format!(
-        " [↑/↓] Navegar | [PgUp/PgDn] Paginar | [Enter/b] Baixar | [t] Tentar | [r/d] Recusar/Excluir | [q] Sair | Total no Acervo (MP3): {} | Cache: {} | Ignoradas: {} | Falhas: {}",
-        total_disco, state.total_cached, state.total_ignored, state.total_failed
+        " [↑/↓] Navegar | [/] Buscar | [Enter/b] Baixar | [t] Tentar | [r/d] Recusar/Excluir | [q] Sair | Total MP3: {} | Cache: {} | Falhas: {}{}",
+        total_disco, state.total_cached, state.total_failed, filter_info
     );
     let footer = Paragraph::new(footer_text).block(
         Block::default()
@@ -638,7 +784,9 @@ fn render_ui(f: &mut Frame, state: &mut TuiState) {
                 Span::raw(" Ação para a faixa "),
                 Span::styled(
                     "PENDENTE",
-                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
                 ),
                 Span::raw(":"),
             ]),
@@ -647,14 +795,18 @@ fn render_ui(f: &mut Frame, state: &mut TuiState) {
                 Span::raw("  Música: "),
                 Span::styled(
                     format!("\"{}\"", title),
-                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
                 ),
             ]),
             Line::from(""),
             Line::from(vec![
                 Span::styled(
                     "   [B / Enter] Baixar Música   ",
-                    Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(Color::Green)
+                        .add_modifier(Modifier::BOLD),
                 ),
                 Span::raw("   "),
                 Span::styled(
@@ -662,10 +814,7 @@ fn render_ui(f: &mut Frame, state: &mut TuiState) {
                     Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
                 ),
                 Span::raw("   "),
-                Span::styled(
-                    "   [Esc] Voltar   ",
-                    Style::default().fg(Color::Gray),
-                ),
+                Span::styled("   [Esc] Voltar   ", Style::default().fg(Color::Gray)),
             ]),
         ];
 
@@ -686,12 +835,16 @@ fn render_ui(f: &mut Frame, state: &mut TuiState) {
                 Span::raw(" Deseja realmente excluir esta faixa da "),
                 Span::styled(
                     "Base de Dados",
-                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
                 ),
                 Span::raw(" e do "),
                 Span::styled(
                     "Disco",
-                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
                 ),
                 Span::raw("?"),
             ]),
@@ -700,16 +853,16 @@ fn render_ui(f: &mut Frame, state: &mut TuiState) {
                 Span::raw("  Música: "),
                 Span::styled(
                     format!("\"{}\"", title),
-                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
                 ),
             ]),
             Line::from(""),
             Line::from(vec![
                 Span::styled(
                     "     [S] Sim (Confirmar Exclusão)     ",
-                    Style::default()
-                        .fg(Color::Red)
-                        .add_modifier(Modifier::BOLD),
+                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
                 ),
                 Span::raw("     "),
                 Span::styled(
@@ -727,6 +880,62 @@ fn render_ui(f: &mut Frame, state: &mut TuiState) {
             .style(Style::default().fg(Color::Red));
 
         let dialog = Paragraph::new(dialog_lines).block(block);
+        f.render_widget(dialog, area);
+    } else if state.search_mode {
+        let area = centered_rect(65, 25, f.area());
+        f.render_widget(Clear, area);
+
+        let search_lines = vec![
+            Line::from(""),
+            Line::from(vec![
+                Span::raw(" Filtrar histórico por "),
+                Span::styled(
+                    "Artista",
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::raw(" ou "),
+                Span::styled(
+                    "Título",
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::raw(":"),
+            ]),
+            Line::from(""),
+            Line::from(vec![
+                Span::raw("  ▶ "),
+                Span::styled(
+                    format!("{}_", state.search_query),
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                ),
+            ]),
+            Line::from(""),
+            Line::from(vec![
+                Span::styled(
+                    "   [Enter] Aplicar Filtro   ",
+                    Style::default()
+                        .fg(Color::Green)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::raw("   "),
+                Span::styled(
+                    "   [Esc] Cancelar / Limpar   ",
+                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                ),
+            ]),
+        ];
+
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title(" BUSCA NO HISTÓRICO ")
+            .style(Style::default().fg(Color::Yellow));
+
+        let dialog = Paragraph::new(search_lines).block(block);
         f.render_widget(dialog, area);
     }
 }
@@ -776,5 +985,48 @@ pub fn count_mp3_files(dir: &str) -> usize {
             .count()
     } else {
         0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_tui_filtered_indices() {
+        let mut state = TuiState::new("http://example.com", "/tmp");
+        state.history.push(TrackHistoryItem {
+            time: "27/10/2026 21:00:00".to_string(),
+            status: HistoryStatus::Success,
+            artist: "Dire Straits".to_string(),
+            title: "Why Worry".to_string(),
+            details: None,
+        });
+        state.history.push(TrackHistoryItem {
+            time: "27/10/2026 21:05:00".to_string(),
+            status: HistoryStatus::Success,
+            artist: "Rex Taylor".to_string(),
+            title: "Valerie".to_string(),
+            details: None,
+        });
+
+        // Sem filtro ativo retorna todas
+        assert_eq!(state.filtered_indices().len(), 2);
+
+        // Filtro por artista com match case-insensitive
+        state.search_query = "dire".to_string();
+        let res = state.filtered_indices();
+        assert_eq!(res.len(), 1);
+        assert_eq!(res[0], 0);
+
+        // Filtro por título
+        state.search_query = "valerie".to_string();
+        let res = state.filtered_indices();
+        assert_eq!(res.len(), 1);
+        assert_eq!(res[0], 1);
+
+        // Filtro com termo inexistente
+        state.search_query = "inexistente".to_string();
+        assert_eq!(state.filtered_indices().len(), 0);
     }
 }

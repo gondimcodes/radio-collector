@@ -93,7 +93,10 @@ mod tests {
             title: "You're Too Far Away".to_string(),
             details: Some("yt-dlp erro: Sign in to confirm your age".to_string()),
         };
-        assert_eq!(item.clean_full_title(), "David Castle - You're Too Far Away");
+        assert_eq!(
+            item.clean_full_title(),
+            "David Castle - You're Too Far Away"
+        );
         assert_eq!(
             item.display_track_and_details(),
             "You're Too Far Away (yt-dlp erro: Sign in to confirm your age)"

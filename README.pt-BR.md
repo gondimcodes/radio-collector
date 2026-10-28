@@ -12,7 +12,7 @@ Em vez de ripar fluxos contínuos de áudio de baixa qualidade com vinhetas cola
 
 ## Recursos Principais
 
-* **Interface Visual TUI (`ratatui`)**: Dashboard interativo no terminal exibindo a música tocando no momento, transições discretas de estado (`BAIXANDO`/`BAIXADO`), histórico completo do acervo com paginação delimitada (`PageUp`/`PageDown`/`Home`/`End`), atalhos para tentar novamente faixas com erro (`[t]`), baixar pendentes (`[Enter/b]`), excluir com confirmação (`[d]`) e contadores sincronizados com o disco.
+* **Interface Visual TUI (`ratatui`)**: Dashboard interativo no terminal exibindo a música tocando no momento, transições discretas de estado (`BAIXANDO`/`BAIXADO`), histórico completo do acervo com paginação delimitada (`PageUp`/`PageDown`/`Home`/`End`), busca e filtragem em tempo real por artista/faixa (`/` ou `f`), atalhos para tentar novamente faixas com erro (`[t]`), baixar pendentes (`[Enter/b]`), excluir com confirmação (`[d]`) e contadores sincronizados com o disco.
 * **Operação em Modo Duplo Inteligente**:
   * **Modo TUI Interativo**: Executado diretamente no terminal para monitoramento visual. Detecta automaticamente se o daemon do `systemd` já está ativo e opera como **Monitor** sem disparar downloads duplicados.
   * **Modo Daemon Headless (`--daemon`)**: Executado via `systemd` em background 24/7 sem renderizar interface gráfica, gerando logs estruturados no `journald`.
@@ -20,8 +20,10 @@ Em vez de ripar fluxos contínuos de áudio de baixa qualidade com vinhetas cola
 * **Deduplicação Inteligente em 2 Camadas**:
   * **Banco SQLite Embutido**: Histórico persistente com normalização de strings (*case-insensitive* e remoção de espaços extras). Registros antigos de falha são automaticamente purgados após download com sucesso.
   * **Inspeção e Reconciliação Física no Disco**: Varredura direta no diretório de destino na inicialização, corrigindo inconsistências e garantindo que o acervo físico e o banco estejam sempre alinhados.
-* **Busca e Coleta Resiliente**:
-  * Busca direta no catálogo oficial do YouTube Music com fallback para múltiplos candidatos (`ytsearch5:`) e contorno de restrições de idade / filtros de palavras.
+* **Busca e Coleta Resiliente em Múltiplos Estágios**:
+  * Busca direta no catálogo oficial do YouTube Music fixada na seção de faixas individuais (`#songs`) com fallback para múltiplos candidatos (`ytsearch5:`) e contorno de restrições de idade / filtros de palavras.
+  * Filtro semântico ativo anti-álbuns e anti-compilações (`--match-filter`) com teto de 20 minutos, descartando automaticamente álbuns inteiros, compactos duplos e shows ao vivo de longa duração.
+  * Bloqueio de expansão de coleções (`--no-playlist`) impedindo o download de playlists inteiras.
   * Suporte opcional a cookies do YouTube (`cookies_file`) para faixas protegidas.
 * **Filtro de Vinhetas e Comerciais**: Expressões regulares configuráveis para descartar chamadas da emissora, propagandas ou faixas inválidas.
 * **Resiliência e Proteção contra Falhas de Extração**:
@@ -71,6 +73,8 @@ radio-collector --config /caminho/meu_config.toml
 * **`↑` / `↓`** (ou **`k` / `j`**): Navega e seleciona faixas na tabela de histórico com cursor indicador (`▶`). A rolagem para de forma limpa nos limites do início e do fim (sem retorno circular).
 * **`PageUp` / `PageDown`**: Pula 15 faixas para cima ou para baixo, agilizando a navegação em acervos extensos.
 * **`Home` / `End`**: Vai diretamente para a faixa mais recente (topo) ou mais antiga (final).
+* **`/`** ou **`f`** / **`F`**: Abre o modal de busca interativa para filtrar o histórico por artista ou título da faixa em tempo real.
+* **`c`** ou **`C`**: Limpa o filtro de busca ativo e restaura a visualização do catálogo completo.
 * **`t`** ou **`T`**: Tenta baixar novamente a faixa com falha (`FALHA`) ou pendente (`PENDENTE`) em background, alterando o status para `BAIXANDO` e recalculando os contadores ao concluir.
 * **`Enter`** ou **`b`**: Baixa a faixa selecionada que esteja com status `PENDENTE`.
 * **`d`** ou **`Delete`**: Abre a janela modal flutuante de confirmação para excluir a música selecionada (`[S]` confirma e remove do banco/disco, `[N]` ou `Esc` cancela).

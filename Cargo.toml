@@ -1,6 +1,6 @@
 [package]
 name = "radio-collector"
-version = "1.2.0"
+version = "1.3.0"
 edition = "2021"
 authors = ["gondim <gondim@gmail.com>"]
 description = "Coletor inteligente de faixas de rádio online com TUI e download via yt-dlp"

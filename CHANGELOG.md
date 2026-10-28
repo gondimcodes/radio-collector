@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.3.0] - 2026-10-27
+
+### Added
+- **Interactive Track History Search and Real-Time Filter in TUI**:
+  - Added dedicated `'/'` or `'f'` / `'F'` shortcut in TUI to open an interactive search modal for querying tracks by artist or title.
+  - Instant live filtering as you type, using accent- and case-insensitive normalization (`Database::normalize`).
+  - Seamless integration with table navigation (`↑`/`↓`, `PageUp`/`PageDown`, `Home`/`End`) and track actions (retry `[t]`, approve `[b]`, delete `[d]`), accurately resolving the underlying track index.
+  - Clear filter shortcuts via `'c'` / `'C'` or `'Esc'`.
+- **Anti-Album & Anti-Compilation Download Guard (`--match-filter`)**:
+  - Integrated active semantic filtering in `yt-dlp` to reject videos matching album/compilation title patterns: `full album`, `complete album`, `álbum completo`, `album completo`, `disco completo`, `compacto completo`, `discografia`, `discography`, `greatest hits`.
+  - Added a strict 20-minute physical duration ceiling (`duration <=? 1200`) and live stream exclusion (`!is_live`), preventing multi-hour concert broadcasts or full album rips from being saved as individual songs.
+- **YouTube Music Official Catalog Pinpointing (`#songs` Protobuf Filter)**:
+  - Enforced the canonical `&sp=EgWKAQIIAWoKEAoQAxAEEAkQBQ%3D%3D` Protobuf filter on YouTube Music queries, restricting results exclusively to the "Songs" section (official single master tracks / Art Tracks).
+- **Playlist and Collection Expansion Prevention (`--no-playlist`)**:
+  - Added `--no-playlist` to prevent `yt-dlp` from entering matching albums or community playlists and downloading the opening track.
+- **4-Stage Resilient Search Pipeline**:
+  - Upgraded download pipeline to a 4-tier fallback: YouTube Music `#songs` $\to$ YouTube Music broad search with match filter $\to$ `ytsearch5:{} official audio` $\to$ `ytsearch5:{}` broad search.
+- **Automated Regression Tests**:
+  - Added `test_forbidden_album_titles_regex` in `downloader` and `test_tui_filtered_indices` in `tui`.
+
+---
+
 ## [1.2.0] - 2026-10-27
 
 ### Added

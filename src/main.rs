@@ -166,7 +166,14 @@ async fn main() -> Result<()> {
             }
         }
 
-        let res = run_tui(state, event_rx, event_tx.clone(), Arc::clone(&db), cfg.download.clone()).await;
+        let res = run_tui(
+            state,
+            event_rx,
+            event_tx.clone(),
+            Arc::clone(&db),
+            cfg.download.clone(),
+        )
+        .await;
         if !is_daemon_active {
             unregister_worker();
         }
@@ -280,10 +287,14 @@ async fn run_observer(
                 last_processed_event_id = ev_id;
                 match tipo.as_str() {
                     "CACHE" => {
-                        let _ = tx.send(CollectorEvent::TrackCached { title: detalhe }).await;
+                        let _ = tx
+                            .send(CollectorEvent::TrackCached { title: detalhe })
+                            .await;
                     }
                     "PENDENTE" => {
-                        let _ = tx.send(CollectorEvent::TrackPending { title: detalhe }).await;
+                        let _ = tx
+                            .send(CollectorEvent::TrackPending { title: detalhe })
+                            .await;
                     }
                     "IGNORADO" => {
                         let parts: Vec<&str> = detalhe.splitn(2, " [").collect();
@@ -405,7 +416,10 @@ async fn run_worker(
                                 .await;
                         }
                         // 2. Checa se já foi processada no SQLite ou se já existe no disco
-                        else if db.is_processed(&title, &cfg.storage.output_dir).unwrap_or(false) {
+                        else if db
+                            .is_processed(&title, &cfg.storage.output_dir)
+                            .unwrap_or(false)
+                        {
                             let _ = db.record_event("CACHE", &title);
                             let _ = tx
                                 .send(CollectorEvent::TrackCached {
@@ -435,7 +449,8 @@ async fn run_worker(
                             match downloader.download(&title).await {
                                 Ok(()) => {
                                     let _ = db.record(&title, "SUCESSO");
-                                    let _ = db.record_event("DOWNLOAD_FINISH", &format!("OK|{}", title));
+                                    let _ = db
+                                        .record_event("DOWNLOAD_FINISH", &format!("OK|{}", title));
                                     let _ = tx
                                         .send(CollectorEvent::DownloadFinished {
                                             title: title.clone(),
@@ -446,7 +461,10 @@ async fn run_worker(
                                 }
                                 Err(e) => {
                                     let _ = db.record(&title, "FALHA");
-                                    let _ = db.record_event("DOWNLOAD_FINISH", &format!("ERR|{}|{}", e, title));
+                                    let _ = db.record_event(
+                                        "DOWNLOAD_FINISH",
+                                        &format!("ERR|{}|{}", e, title),
+                                    );
                                     let _ = tx
                                         .send(CollectorEvent::DownloadFinished {
                                             title: title.clone(),

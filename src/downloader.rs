@@ -24,20 +24,14 @@ impl Downloader {
         }
     }
 
-    pub async fn download(
-        &self,
-        title: &str,
-    ) -> Result<()> {
+    pub async fn download(&self, title: &str) -> Result<()> {
         let timeout_dur = Duration::from_secs(self.cfg.timeout_seconds);
         timeout(timeout_dur, self.execute_download(title))
             .await
             .context("Tempo limite de download excedido")?
     }
 
-    async fn execute_download(
-        &self,
-        title: &str,
-    ) -> Result<()> {
+    async fn execute_download(&self, title: &str) -> Result<()> {
         // Sanitiza e trunca o título para nome de arquivo físico padronizado e seguro (CWE-1284)
         let safe_title = title
             .replace(['/', '\\'], "-")
@@ -52,22 +46,48 @@ impl Downloader {
             safe_title
         );
 
-        // Tentativa 1: Busca nativa no catálogo do YouTube Music (sem censura de títulos como 'Making Love')
-        let music_query = format!("https://music.youtube.com/search?q={}", Self::urlencode(title));
-        if self.run_ytdlp_attempt(title, &music_query, &output_template).await.is_ok() {
+        // Tentativa 1: Busca nativa no catálogo oficial do YouTube Music (seção "Songs" / Art Tracks)
+        let music_songs_query = format!(
+            "https://music.youtube.com/search?q={}&sp=EgWKAQIIAWoKEAoQAxAEEAkQBQ%3D%3D",
+            Self::urlencode(title)
+        );
+        if self
+            .run_ytdlp_attempt(title, &music_songs_query, &output_template)
+            .await
+            .is_ok()
+        {
             return Ok(());
         }
 
-        // Tentativa 2: Busca multi-candidato priorizando áudio oficial de estúdio
+        // Tentativa 2: Busca ampla no YouTube Music (sem filtro de aba, para faixas não distribuídas em gravadoras digitais)
+        let music_broad_query = format!(
+            "https://music.youtube.com/search?q={}",
+            Self::urlencode(title)
+        );
+        if self
+            .run_ytdlp_attempt(title, &music_broad_query, &output_template)
+            .await
+            .is_ok()
+        {
+            return Ok(());
+        }
+
+        // Tentativa 3: Busca multi-candidato priorizando áudio oficial de estúdio
         let primary_query = format!("ytsearch5:{} official audio", title);
-        let first_err = match self.run_ytdlp_attempt(title, &primary_query, &output_template).await {
+        let first_err = match self
+            .run_ytdlp_attempt(title, &primary_query, &output_template)
+            .await
+        {
             Ok(()) => return Ok(()),
             Err(e) => e,
         };
 
-        // Tentativa 3 (Fallback): Busca multi-candidato ampla (Artista - Música)
+        // Tentativa 4 (Fallback): Busca multi-candidato ampla (Artista - Música)
         let fallback_query = format!("ytsearch5:{}", title);
-        match self.run_ytdlp_attempt(title, &fallback_query, &output_template).await {
+        match self
+            .run_ytdlp_attempt(title, &fallback_query, &output_template)
+            .await
+        {
             Ok(()) => Ok(()),
             Err(second_err) => {
                 let msg1 = first_err.to_string();
@@ -116,8 +136,11 @@ impl Downloader {
             .arg(&self.cfg.audio_quality)
             .arg("--max-downloads")
             .arg("1")
+            .arg("--no-playlist")
             .arg("--no-abort-on-error")
             .arg("--ignore-errors")
+            .arg("--match-filter")
+            .arg("!is_live & duration <=? 1200 & title !~= '(?i)full album|complete album|álbum completo|album completo|disco completo|compacto completo|discografia|discography|greatest hits'")
             .arg("-o")
             .arg(output_template);
 
@@ -326,5 +349,23 @@ mod tests {
             Downloader::urlencode("Rex Taylor - Valerie"),
             "Rex+Taylor+-+Valerie"
         );
+    }
+
+    #[test]
+    fn test_forbidden_album_titles_regex() {
+        let pattern = regex::Regex::new(r"(?i)full album|complete album|álbum completo|album completo|disco completo|compacto completo|discografia|discography|greatest hits").unwrap();
+        assert!(
+            pattern.is_match("Rex Taylor - My songs (1976) FULL ALBUM (Funk/soul, rock, pop, AOR)")
+        );
+        assert!(pattern.is_match(
+            "Manchester - My Dear / Surprise - (Compacto Completo - 1980) - Baú Musical"
+        ));
+        assert!(pattern.is_match("Queen - Greatest Hits (1981) [Full Album]"));
+        assert!(pattern.is_match("Tim Maia - Disco Completo 1973"));
+
+        assert!(!pattern.is_match("Dire Straits - Why Worry"));
+        assert!(!pattern.is_match("Rex Taylor - Valerie"));
+        assert!(!pattern.is_match("Manchester - Surprise"));
+        assert!(!pattern.is_match("Major Harris - Love Won't Let Me Wait"));
     }
 }
