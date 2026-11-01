@@ -46,46 +46,52 @@ impl Downloader {
             safe_title
         );
 
-        // Tentativa 1: Busca nativa no catálogo oficial do YouTube Music (seção "Songs" / Art Tracks)
+        // Estágio 1 (Prioridade Absoluta): Catálogo Fonográfico Oficial do YouTube (Art Tracks / - Topic)
+        // Busca direcionada ao canal do artista gerado pela gravadora com assinatura fonográfica internacional
+        let topic_query = format!("ytsearch5:\"{}\" topic", title);
+        let topic_filters = [
+            "!is_live & duration <=? 1200 & channel ~= '(?i)- Topic$'",
+            "!is_live & duration <=? 1200 & description ~= '(?i)Provided to YouTube'",
+        ];
+        if self
+            .run_ytdlp_attempt(title, &topic_query, &topic_filters, &output_template)
+            .await
+            .is_ok()
+        {
+            return Ok(());
+        }
+
+        // Estágio 2: Catálogo oficial do YouTube Music (seção "Songs" / Art Tracks via token Protobuf)
         let music_songs_query = format!(
             "https://music.youtube.com/search?q={}&sp=EgWKAQIIAWoKEAoQAxAEEAkQBQ%3D%3D",
             Self::urlencode(title)
         );
+        let music_filters = ["!is_live & duration <=? 1200"];
         if self
-            .run_ytdlp_attempt(title, &music_songs_query, &output_template)
+            .run_ytdlp_attempt(title, &music_songs_query, &music_filters, &output_template)
             .await
             .is_ok()
         {
             return Ok(());
         }
 
-        // Tentativa 2: Busca ampla no YouTube Music (sem filtro de aba, para faixas não distribuídas em gravadoras digitais)
-        let music_broad_query = format!(
-            "https://music.youtube.com/search?q={}",
-            Self::urlencode(title)
-        );
-        if self
-            .run_ytdlp_attempt(title, &music_broad_query, &output_template)
-            .await
-            .is_ok()
-        {
-            return Ok(());
-        }
-
-        // Tentativa 3: Busca multi-candidato priorizando áudio oficial de estúdio
+        // Estágio 3: Busca multi-candidato priorizando áudio oficial com descarte estrito de covers/remixes/ao vivo
         let primary_query = format!("ytsearch5:{} official audio", title);
+        let strict_filters = [
+            "!is_live & duration <=? 1200 & title !~= '(?i)full album|complete album|álbum completo|album completo|disco completo|compacto completo|discografia|discography|greatest hits|você sabia|voce sabia|curiosidade|curiosidades|bastidores|podcast|entrevista|react|cover|tribute|tributo|karaoke|remix|mix|ao vivo|live|acústico|acustico|acoustic'",
+        ];
         let first_err = match self
-            .run_ytdlp_attempt(title, &primary_query, &output_template)
+            .run_ytdlp_attempt(title, &primary_query, &strict_filters, &output_template)
             .await
         {
             Ok(()) => return Ok(()),
             Err(e) => e,
         };
 
-        // Tentativa 4 (Fallback): Busca multi-candidato ampla (Artista - Música)
+        // Estágio 4 (Fallback): Busca multi-candidato ampla (Artista - Música) com os mesmos filtros estritos
         let fallback_query = format!("ytsearch5:{}", title);
         match self
-            .run_ytdlp_attempt(title, &fallback_query, &output_template)
+            .run_ytdlp_attempt(title, &fallback_query, &strict_filters, &output_template)
             .await
         {
             Ok(()) => Ok(()),
@@ -123,6 +129,7 @@ impl Downloader {
         &self,
         title: &str,
         search_query: &str,
+        match_filters: &[&str],
         output_template: &str,
     ) -> Result<()> {
         let mut cmd = Command::new(&self.cfg.ytdlp_path);
@@ -136,13 +143,17 @@ impl Downloader {
             .arg(&self.cfg.audio_quality)
             .arg("--max-downloads")
             .arg("1")
+            .arg("--playlist-items")
+            .arg("1-5")
             .arg("--no-playlist")
             .arg("--no-abort-on-error")
-            .arg("--ignore-errors")
-            .arg("--match-filter")
-            .arg("!is_live & duration <=? 1200 & title !~= '(?i)full album|complete album|álbum completo|album completo|disco completo|compacto completo|discografia|discography|greatest hits|você sabia|voce sabia|curiosidade|curiosidades|bastidores|podcast|entrevista|react'")
-            .arg("-o")
-            .arg(output_template);
+            .arg("--ignore-errors");
+
+        for filter in match_filters {
+            cmd.arg("--match-filter").arg(filter);
+        }
+
+        cmd.arg("-o").arg(output_template);
 
         if self.cfg.embed_metadata {
             cmd.arg("--embed-metadata");
@@ -353,7 +364,7 @@ mod tests {
 
     #[test]
     fn test_forbidden_album_titles_regex() {
-        let pattern = regex::Regex::new(r"(?i)full album|complete album|álbum completo|album completo|disco completo|compacto completo|discografia|discography|greatest hits|você sabia|voce sabia|curiosidade|curiosidades|bastidores|podcast|entrevista|react").unwrap();
+        let pattern = regex::Regex::new(r"(?i)full album|complete album|álbum completo|album completo|disco completo|compacto completo|discografia|discography|greatest hits|você sabia|voce sabia|curiosidade|curiosidades|bastidores|podcast|entrevista|react|cover|tribute|tributo|karaoke|remix|mix|ao vivo|live|acústico|acustico|acoustic").unwrap();
         assert!(
             pattern.is_match("Rex Taylor - My songs (1976) FULL ALBUM (Funk/soul, rock, pop, AOR)")
         );
@@ -367,10 +378,17 @@ mod tests {
         );
         assert!(pattern.is_match("Curiosidades sobre a música Paul Denver - Rain And Memories"));
         assert!(pattern.is_match("Podcast Entrevista - Paul Denver e sua história"));
+        assert!(pattern.is_match("Alan Jackson - I'll Try (Cover by Karen Watson)"));
+        assert!(pattern.is_match("Air Supply - All Out of Love (Club Remix 2024)"));
+        assert!(
+            pattern.is_match("Everything But The Girl - Driving (Virgin Magnetic Material Remix)")
+        );
+        assert!(pattern.is_match("Double You - She's Beautiful (Live Version)"));
 
         assert!(!pattern.is_match("Dire Straits - Why Worry"));
         assert!(!pattern.is_match("Rex Taylor - Valerie"));
         assert!(!pattern.is_match("Manchester - Surprise"));
         assert!(!pattern.is_match("Major Harris - Love Won't Let Me Wait"));
+        assert!(!pattern.is_match("Air Supply - All Out Of Love"));
     }
 }

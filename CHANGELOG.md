@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.3.3] - 2026-10-31
+
+### Added
+- **Record Label Art Track & Topic Channel Verification (Anti-Cover & Anti-Remix)**:
+  - Redesigned download pipeline in `src/downloader.rs` to prioritize official record label deliveries (*Art Tracks*) over community video uploads.
+  - **Stage 1 (Strict Fonographic)**: Direct query for label-generated channels (`ytsearch5:"{title}" topic`) with `--match-filter` requiring official `- Topic$` channel or `"Provided to YouTube"` licensing signature.
+  - **Stage 2 (YouTube Music `#songs`)**: Pinpointed Protobuf search with `--playlist-items 1-5` cap to eliminate unbounded paging latency.
+  - **Stage 3 & 4 (Fallback Guard)**: Strict exclusion of community covers, acoustic versions, tributes, karaokes, remixes, and live recordings in fallback searches (`cover`, `tribute`, `tributo`, `karaoke`, `remix`, `mix`, `ao vivo`, `live`, `acústico`, `acoustic`).
+- **Automated Regression Tests**:
+  - Expanded `test_forbidden_album_titles_regex` in `src/downloader.rs` to ensure full coverage against covers, remixes, live acoustic variations, and fan tributes.
+
+---
+
 ## [1.3.2] - 2026-10-28
 
 ### Added
