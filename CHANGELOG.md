@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.4.0] - 2026-11-02
+
+### Added
+- **Missing Track Status (`AUSENTE`) and Inconsistency Detection**:
+  - Introduced `HistoryStatus::Missing` (`AUSENTE` in bold magenta) to visibly flag tracks registered in SQLite whose physical `.mp3` file does not exist on disk.
+  - Added dedicated `Ausentes: X` counter to the TUI footer alongside `Total MP3`, `Cache`, and `Falhas`.
+  - Added full interactive support for `AUSENTE` tracks: re-download on demand with `[t]` or purge from SQLite with `[d]`.
+  - Configured `is_processed` to exclude `AUSENTE` records, ensuring the daemon automatically re-downloads missing tracks if broadcast again by the radio.
+- **Configurable Periodic Self-Healing & Disk Reconciliation**:
+  - Added `reconcile_interval_seconds` (default: 3600 seconds / 1 hour; `0` to disable) in `[storage]` of `config.toml` (zero hardcoded values).
+  - Background asynchronous task in both headless daemon (`run_worker`) and TUI monitor (`run_observer`) executing non-blocking disk reconciliation via `tokio::task::spawn_blocking`.
+- **Automated Regression Tests**:
+  - Added `test_reconcile_with_disk_restores_missing_files_and_preserves_distinct_tracks` in `src/db.rs`.
+  - Added `test_is_processed_word_boundary_anti_substring_collision` in `src/db.rs`.
+  - Added `test_tui_in_memory_cache_counter_preservation` in `src/tui.rs`.
+  - Added `test_storage_config_defaults` in `src/config.rs`.
+
+### Fixed
+- **TUI Cache Counter Preservation and Ephemeral State**:
+  - Fixed bug where `TuiState::refresh_stats` was querying SQLite `historico` for `status = 'CACHE'` (which is always 0) and clobbering the live session counter `total_cached`.
+  - Fixed in-memory duplicate insertion in `CollectorEvent::TrackCached` using `self.history.retain(...)` to ensure the table header total matches actual unique tracks without inflating on cache hits.
+- **Anti-Substring Collision in Metadata Processing (`is_processed`)**:
+  - Enforced strict word boundaries (`format!(" {} ", ...)`) in `is_processed` and `reconcile_with_disk` to prevent short titles (e.g., *A Noite*) from erroneously matching longer songs containing that substring (e.g., *Somos todos iguais nesta noite*).
+
+---
+
 ## [1.3.3] - 2026-10-31
 
 ### Added
@@ -42,7 +68,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **TUI Header and Footer Synchronization**:
   - Ensured that deleting a track via `[d]` immediately updates both the in-memory/table count (header) and the physical on-disk atomic counter (footer `Total MP3`) in lockstep.
 - **Automated Regression Tests**:
-  - Added dedicated unit test `test_delete_track_and_physical_file` in [`src/db.rs`](file:///home/gondim/projetos/radio-collector/src/db.rs) validating concurrent SQLite row removal and physical file unlinking.
+  - Added dedicated unit test `test_delete_track_and_physical_file` in `src/db.rs` validating concurrent SQLite row removal and physical file unlinking.
 
 ---
 

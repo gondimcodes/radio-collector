@@ -36,6 +36,7 @@ pub struct TuiState {
     pub pending_action: Option<(usize, String)>,
     pub total_success: usize,
     pub total_cached: usize,
+    pub total_missing: usize,
     pub total_ignored: usize,
     pub total_failed: usize,
     pub search_query: String,
@@ -62,6 +63,7 @@ impl TuiState {
             table_state,
             total_success: 0,
             total_cached: 0,
+            total_missing: 0,
             total_ignored: 0,
             total_failed: 0,
             search_query: String::new(),
@@ -89,10 +91,11 @@ impl TuiState {
     }
 
     pub fn refresh_stats(&mut self, db: &Database) {
-        if let Ok((success, failed, cached)) = db.get_stats() {
+        if let Ok((success, failed, _, missing)) = db.get_stats() {
             self.total_success = success;
             self.total_failed = failed;
-            self.total_cached = cached;
+            self.total_missing = missing;
+            // total_cached é um contador estritamente em memória da sessão ativa da TUI
         }
     }
 
@@ -165,6 +168,7 @@ impl TuiState {
                         self.pending_action = Some((real_idx, item.clean_full_title()));
                     } else if item.status == HistoryStatus::Success
                         || item.status == HistoryStatus::Failed
+                        || item.status == HistoryStatus::Missing
                     {
                         self.pending_delete = Some((real_idx, item.clean_full_title()));
                     }
@@ -183,6 +187,8 @@ impl TuiState {
                     self.total_success -= 1;
                 } else if item.status == HistoryStatus::Failed && self.total_failed > 0 {
                     self.total_failed -= 1;
+                } else if item.status == HistoryStatus::Missing && self.total_missing > 0 {
+                    self.total_missing -= 1;
                 }
                 let indices = self.filtered_indices();
                 if indices.is_empty() {
@@ -304,13 +310,17 @@ impl TuiState {
             }
             CollectorEvent::TrackCached { title } => {
                 let (artist, track) = split_artist_track(&title);
-                self.total_cached += 1;
                 // Evita duplicar linha se a faixa no topo do histórico já for exatamente essa música
                 if let Some(first) = self.history.first() {
                     if first.artist == artist && first.title == track {
                         return;
                     }
                 }
+                self.total_cached += 1;
+                let norm_full = Database::normalize(&title);
+                // Remove ocorrência anterior do histórico para não duplicar faixas e manter a contagem exata
+                self.history
+                    .retain(|item| Database::normalize(&item.clean_full_title()) != norm_full);
                 self.push_history(TrackHistoryItem {
                     time: now,
                     status: HistoryStatus::Cached,
@@ -532,6 +542,7 @@ pub async fn run_tui(
                                         let item = &state.history[real_idx];
                                         if item.status == HistoryStatus::Failed
                                             || item.status == HistoryStatus::Pending
+                                            || item.status == HistoryStatus::Missing
                                         {
                                             let full_title = item.clean_full_title();
                                             state.history[real_idx].status =
@@ -699,6 +710,9 @@ fn render_ui(f: &mut Frame, state: &mut TuiState) {
                     .add_modifier(Modifier::BOLD),
                 HistoryStatus::Cached => Style::default().fg(Color::Blue),
                 HistoryStatus::Ignored => Style::default().fg(Color::DarkGray),
+                HistoryStatus::Missing => Style::default()
+                    .fg(Color::Magenta)
+                    .add_modifier(Modifier::BOLD),
                 HistoryStatus::Failed => {
                     Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
                 }
@@ -763,8 +777,8 @@ fn render_ui(f: &mut Frame, state: &mut TuiState) {
         String::new()
     };
     let footer_text = format!(
-        " [↑/↓] Navegar | [/] Buscar | [Enter/b] Baixar | [t] Tentar | [r/d] Recusar/Excluir | [q] Sair | Total MP3: {} | Cache: {} | Falhas: {}{}",
-        total_disco, state.total_cached, state.total_failed, filter_info
+        " [↑/↓] Navegar | [/] Buscar | [Enter/b] Baixar | [t] Tentar | [r/d] Recusar/Excluir | [q] Sair | Total MP3: {} | Cache: {} | Ausentes: {} | Falhas: {}{}",
+        total_disco, state.total_cached, state.total_missing, state.total_failed, filter_info
     );
     let footer = Paragraph::new(footer_text).block(
         Block::default()
@@ -1028,5 +1042,86 @@ mod tests {
         // Filtro com termo inexistente
         state.search_query = "inexistente".to_string();
         assert_eq!(state.filtered_indices().len(), 0);
+    }
+
+    #[test]
+    fn test_tui_in_memory_cache_counter_preservation() {
+        let unique = format!(
+            "test_tui_db_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let temp_dir = std::env::temp_dir().join(&unique);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let db_path = temp_dir.join("test.db");
+        let db = Database::open(db_path.to_str().unwrap()).unwrap();
+
+        let mut state = TuiState::new("http://example.com", temp_dir.to_str().unwrap());
+        assert_eq!(state.total_cached, 0);
+
+        // Dispara evento TrackCached
+        state.handle_event(CollectorEvent::TrackCached {
+            title: "Elton John - Sacrifice".to_string(),
+        });
+        assert_eq!(state.total_cached, 1);
+        assert_eq!(state.history.len(), 1);
+        assert_eq!(state.history[0].status, HistoryStatus::Cached);
+
+        // Executa refresh_stats com o banco vazio (ou apenas com faixas SUCESSO)
+        // Garante que o contador em memória NÃO seja zerado
+        state.refresh_stats(&db);
+        assert_eq!(
+            state.total_cached, 1,
+            "total_cached em memória deve ser preservado mesmo após refresh_stats"
+        );
+
+        // Evento repetido consecutivo da mesma faixa não deve inflar o contador
+        state.handle_event(CollectorEvent::TrackCached {
+            title: "Elton John - Sacrifice".to_string(),
+        });
+        assert_eq!(state.total_cached, 1);
+
+        // Nova faixa em cache deve incrementar
+        state.handle_event(CollectorEvent::TrackCached {
+            title: "Queen - Radio Ga Ga".to_string(),
+        });
+        assert_eq!(state.total_cached, 2);
+
+        // Faixa que já estava no histórico como BAIXADO não deve duplicar o tamanho do histórico
+        state.history.push(TrackHistoryItem {
+            time: "01/11/2026 12:00:00".to_string(),
+            status: HistoryStatus::Success,
+            artist: "Dire Straits".to_string(),
+            title: "Why Worry".to_string(),
+            details: None,
+        });
+        let len_before = state.history.len();
+        state.handle_event(CollectorEvent::TrackCached {
+            title: "Dire Straits - Why Worry".to_string(),
+        });
+        assert_eq!(
+            state.history.len(),
+            len_before,
+            "Faixa em cache não deve duplicar entrada no histórico"
+        );
+        assert_eq!(state.history[0].title, "Why Worry");
+        assert_eq!(state.history[0].status, HistoryStatus::Cached);
+
+        // Verifica que faixa com status Missing pode ser selecionada para delete
+        state.history.push(TrackHistoryItem {
+            time: "02/11/2026 10:00:00".to_string(),
+            status: HistoryStatus::Missing,
+            artist: "Ivan Lins".to_string(),
+            title: "A Noite".to_string(),
+            details: None,
+        });
+        state.table_state.select(Some(state.history.len() - 1));
+        state.request_action_or_delete();
+        assert!(state.pending_delete.is_some());
+        state.cancel_action_or_delete();
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 }

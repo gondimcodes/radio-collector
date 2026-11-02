@@ -26,6 +26,8 @@ pub struct StreamConfig {
 pub struct StorageConfig {
     pub output_dir: String,
     pub db_path: String,
+    #[serde(default = "default_reconcile_interval")]
+    pub reconcile_interval_seconds: u64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -74,6 +76,10 @@ fn default_check_interval() -> u64 {
 
 fn default_timeout() -> u64 {
     10
+}
+
+fn default_reconcile_interval() -> u64 {
+    3600
 }
 
 fn default_ytdlp_path() -> String {
@@ -149,5 +155,17 @@ mod tests {
             cfg.cookies_file,
             Some("/etc/radio-collector/cookies.txt".to_string())
         );
+    }
+
+    #[test]
+    fn test_storage_config_defaults() {
+        let toml_str = r#"
+            output_dir = "/tmp/musicas"
+            db_path = "/tmp/musicas.db"
+        "#;
+        let cfg: StorageConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(cfg.output_dir, "/tmp/musicas");
+        assert_eq!(cfg.db_path, "/tmp/musicas.db");
+        assert_eq!(cfg.reconcile_interval_seconds, 3600);
     }
 }

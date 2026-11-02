@@ -65,6 +65,7 @@ pub enum HistoryStatus {
     Cached,
     Ignored,
     Failed,
+    Missing,
 }
 
 impl HistoryStatus {
@@ -76,6 +77,7 @@ impl HistoryStatus {
             HistoryStatus::Cached => "CACHE",
             HistoryStatus::Ignored => "IGNORADO",
             HistoryStatus::Failed => "FALHA",
+            HistoryStatus::Missing => "AUSENTE",
         }
     }
 }

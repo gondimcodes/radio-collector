@@ -12,14 +12,14 @@ Rather than ripping continuous, lossy radio audio streams riddled with station j
 
 ## Key Features
 
-* **Interactive Terminal UI (`ratatui`)**: Real-time terminal dashboard featuring current track monitoring, discrete state transitions, complete catalog history with bounded pagination (`PageUp`/`PageDown`/`Home`/`End`), live search and filtering by artist/title (`/` or `f`), interactive retry for failed tracks (`[t]`), manual download of pending items (`[Enter/b]`), deletion modals (`[d]`), and filesystem-synchronized counters.
+* **Interactive Terminal UI (`ratatui`)**: Real-time terminal dashboard featuring current track monitoring, discrete state transitions, complete catalog history with bounded pagination (`PageUp`/`PageDown`/`Home`/`End`), live search and filtering by artist/title (`/` or `f`), interactive retry for failed or missing tracks (`[t]`), manual download of pending items (`[Enter/b]`), deletion modals (`[d]`), and filesystem-synchronized counters (`Total MP3`, `Cache`, `Ausentes`, `Falhas`).
 * **Smart Dual-Mode Architecture**:
   * **Interactive TUI Mode**: Ran directly in the terminal for monitoring and management. Automatically detects if the background `systemd` daemon is running and enters **Monitor Mode** without firing duplicate downloads.
   * **Headless Daemon Mode (`--daemon`)**: Runs 24/7 in the background via `systemd` without rendering a UI, producing structured logs directly to `journald`.
 * **Zero Bandwidth Waste**: Connects to the Icecast/SHOUTcast stream, reads only the metadata headers and ICY track title interval, and immediately disconnects (~1 KB per poll).
-* **2-Tier Intelligent Deduplication**:
+* **2-Tier Intelligent Deduplication & Self-Healing**:
   * **Embedded SQLite Database**: Persistent history with case-insensitive normalization and whitespace stripping (WAL mode). Obsolete failure records are automatically purged upon successful download.
-  * **Physical Filesystem Reconciliation**: Automatically inspects destination directories on startup to heal database records and prevent redundant downloads.
+  * **Physical Filesystem Reconciliation & Self-Healing**: Periodically and upon startup, inspects destination directories to reconcile SQLite with actual disk storage without destructive purges. Missing files are transparently marked as `AUSENTE` (in magenta) with full retry capability (`[t]`), and automatically restored to `SUCESSO` if the file returns.
 * **Resilient Search & Multi-Stage Retrieval**:
   * Direct YouTube Music catalog search pinned strictly to official single masters (`#songs` section) with multi-candidate fallback (`ytsearch5:`) and age-gate bypass mechanisms.
   * Active anti-album and anti-compilation match filter (`--match-filter`) with a 20-minute ceiling, skipping full albums, vinyl compacts, and multi-hour live concerts.
@@ -75,7 +75,7 @@ radio-collector --config /path/to/custom_config.toml
 * **`Home` / `End`**: Jump directly to the newest (top) or oldest (bottom) track.
 * **`/`** or **`f`** / **`F`**: Open interactive search modal to filter track history by artist or song title in real time.
 * **`c`** or **`C`**: Clear active search filter and restore full catalog view.
-* **`t`** or **`T`**: Retry downloading the selected failed (`FALHA`) or pending (`PENDENTE`) track immediately in the background. Automatically updates status to `BAIXANDO` and reconciles counters upon completion.
+* **`t`** or **`T`**: Retry downloading the selected failed (`FALHA`), missing (`AUSENTE`), or pending (`PENDENTE`) track immediately in the background. Automatically updates status to `BAIXANDO` and reconciles counters upon completion.
 * **`Enter`** or **`b`**: Download the selected pending (`PENDENTE`) track.
 * **`d`** or **`Delete`**: Open floating confirmation modal to safely delete the selected track from both SQLite and the filesystem (`[S]` confirms deletion, `[N]` or `Esc` cancels).
 * **`q`** or **`Esc`**: Gracefully exit the application and restore terminal state.
@@ -115,6 +115,7 @@ timeout_seconds = 10                              # ICY connection timeout
 [storage]
 output_dir = "/var/musicas"                       # Final MP3 destination folder
 db_path = "/var/lib/radio-collector/musicas.db"   # SQLite database path
+reconcile_interval_seconds = 3600                 # Periodic disk reconciliation interval (0 to disable)
 
 [download]
 ytdlp_path = "/usr/local/bin/yt-dlp"              # yt-dlp binary path

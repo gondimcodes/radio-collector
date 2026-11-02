@@ -55,15 +55,15 @@ impl Database {
     /// Reconcilia o banco SQLite com o sistema de arquivos:
     /// - Garante que todo arquivo MP3 válido presente no disco tenha registro SUCESSO no SQLite.
     /// - Corrige registros que estavam marcados como FALHA caso o arquivo físico exista no disco.
+    /// - Limpa registros duplicados de FALHA para faixas que já existem com SUCESSO no disco.
     pub fn reconcile_with_disk(&self, dest_dir: &str) -> Result<usize> {
         let dest_path = Path::new(dest_dir);
         if !dest_path.exists() {
             return Ok(0);
         }
 
-        let mut updated = 0;
-        let conn = self.get_conn()?;
-
+        // 1. Coleta todos os arquivos .mp3 válidos no disco (>= 500 KB)
+        let mut disk_stems = Vec::new();
         if let Ok(entries) = fs::read_dir(dest_path) {
             for entry in entries.flatten() {
                 let path = entry.path();
@@ -73,57 +73,8 @@ impl Database {
                 {
                     if let Ok(meta) = path.metadata() {
                         if meta.len() >= 500 * 1024 {
-                            let file_stem = path
-                                .file_stem()
-                                .unwrap_or_default()
-                                .to_string_lossy()
-                                .to_string();
-
-                            let norm_stem = Self::normalize(&file_stem);
-
-                            let mut stmt =
-                                conn.prepare("SELECT id, titulo, status FROM historico")?;
-                            let rows: Vec<(i64, String, String)> = stmt
-                                .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
-                                .flatten()
-                                .collect();
-
-                            let mut matched = false;
-                            for (id, titulo, status) in rows {
-                                let parts: Vec<&str> = titulo.splitn(2, '-').collect();
-                                let (artist_p, track_p) = if parts.len() == 2 {
-                                    (Self::normalize(parts[0]), Self::normalize(parts[1]))
-                                } else {
-                                    (String::new(), Self::normalize(&titulo))
-                                };
-                                let norm_tit = Self::normalize(&titulo);
-
-                                let is_match = (!artist_p.is_empty()
-                                    && norm_stem.contains(&artist_p)
-                                    && norm_stem.contains(&track_p))
-                                    || norm_stem.contains(&norm_tit);
-
-                                if is_match {
-                                    matched = true;
-                                    if status != "SUCESSO" {
-                                        let _ = conn.execute(
-                                            "UPDATE historico SET status = 'SUCESSO' WHERE id = ?1",
-                                            params![id],
-                                        );
-                                        updated += 1;
-                                    }
-                                    break;
-                                }
-                            }
-
-                            if !matched {
-                                let _ = conn.execute(
-                                    "INSERT INTO historico (titulo, status, baixado_em)
-                                     VALUES (?1, 'SUCESSO', CURRENT_TIMESTAMP)
-                                     ON CONFLICT(titulo) DO UPDATE SET status = 'SUCESSO'",
-                                    params![file_stem],
-                                );
-                                updated += 1;
+                            if let Some(stem) = path.file_stem() {
+                                disk_stems.push(stem.to_string_lossy().to_string());
                             }
                         }
                     }
@@ -131,7 +82,75 @@ impl Database {
             }
         }
 
-        // Limpa registros duplicados de FALHA para faixas que já existem com SUCESSO no disco
+        if disk_stems.is_empty() {
+            return Ok(0);
+        }
+
+        let mut updated = 0;
+        let conn = self.get_conn()?;
+
+        let mut stmt = conn.prepare("SELECT id, titulo, status FROM historico")?;
+        let rows: Vec<(i64, String, String)> = stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+            .flatten()
+            .collect();
+
+        let mut matched_db_ids = std::collections::HashSet::new();
+
+        // 2. Reconciliação Disco -> Banco
+        for file_stem in &disk_stems {
+            let norm_stem = Self::normalize(file_stem);
+            let padded_stem = format!(" {} ", norm_stem);
+
+            let mut matched = false;
+
+            // Casamento exato, case-insensitive ou bloco de título completo contido no nome do arquivo
+            for (id, titulo, status) in &rows {
+                let norm_tit = Self::normalize(titulo);
+                let padded_tit = format!(" {} ", norm_tit);
+
+                let is_match = norm_stem == norm_tit
+                    || file_stem.eq_ignore_ascii_case(titulo)
+                    || padded_stem.contains(&padded_tit);
+
+                if is_match {
+                    matched = true;
+                    matched_db_ids.insert(*id);
+                    if status != "SUCESSO" {
+                        let _ = conn.execute(
+                            "UPDATE historico SET status = 'SUCESSO' WHERE id = ?1",
+                            params![id],
+                        );
+                        updated += 1;
+                    }
+                    break;
+                }
+            }
+
+            // Se o arquivo físico no disco não existe no banco, insere como SUCESSO
+            if !matched {
+                let _ = conn.execute(
+                    "INSERT INTO historico (titulo, status, baixado_em)
+                     VALUES (?1, 'SUCESSO', CURRENT_TIMESTAMP)
+                     ON CONFLICT(titulo) DO UPDATE SET status = 'SUCESSO'",
+                    params![file_stem],
+                );
+                updated += 1;
+            }
+        }
+
+        // 3. Reconciliação Banco -> Disco: marca como AUSENTE registros SUCESSO cujos arquivos inexistem no disco
+        for (id, _titulo, status) in &rows {
+            if status == "SUCESSO" && !matched_db_ids.contains(id) {
+                let _ = conn.execute(
+                    "UPDATE historico SET status = 'AUSENTE' WHERE id = ?1",
+                    params![id],
+                );
+                updated += 1;
+            }
+        }
+
+        // 4. Limpa registros duplicados de FALHA para faixas que já existem com SUCESSO no disco
         let _ = conn.execute(
             "DELETE FROM historico WHERE status IN ('FALHA', 'TIMEOUT') AND LOWER(titulo) IN (SELECT LOWER(titulo) FROM historico WHERE status = 'SUCESSO')",
             [],
@@ -194,11 +213,14 @@ impl Database {
                         .map(|s| s.to_string_lossy().to_string())
                         .unwrap_or_default();
                     let norm_fname = Self::normalize(&file_stem);
+                    let padded_fname = format!(" {} ", norm_fname);
+                    let padded_artist = format!(" {} ", artist_part);
+                    let padded_track = format!(" {} ", track_part);
                     let is_match = norm_fname == norm_full_title
                         || (!artist_part.is_empty()
                             && !track_part.is_empty()
-                            && norm_fname.contains(&artist_part)
-                            && norm_fname.contains(&track_part));
+                            && padded_fname.contains(&padded_artist)
+                            && padded_fname.contains(&padded_track));
                     if is_match {
                         let _ = self.record(title, "SUCESSO");
                         return Ok(true);
@@ -329,10 +351,11 @@ impl Database {
         Ok(())
     }
 
-    pub fn get_stats(&self) -> Result<(usize, usize, usize)> {
+    pub fn get_stats(&self) -> Result<(usize, usize, usize, usize)> {
         let mut total_success = 0;
         let mut total_failed = 0;
         let mut total_cached = 0;
+        let mut total_missing = 0;
 
         let conn = self.get_conn()?;
         let mut stmt = conn.prepare("SELECT status, COUNT(*) FROM historico GROUP BY status")?;
@@ -346,12 +369,13 @@ impl Database {
             match r.0.as_str() {
                 "SUCESSO" => total_success = r.1,
                 "CACHE" => total_cached += r.1,
+                "AUSENTE" => total_missing += r.1,
                 "FALHA" | "TIMEOUT" => total_failed += r.1,
                 _ => {}
             }
         }
 
-        Ok((total_success, total_failed, total_cached))
+        Ok((total_success, total_failed, total_cached, total_missing))
     }
 
     pub fn get_all_history(&self) -> Result<Vec<(String, String, String)>> {
@@ -444,6 +468,108 @@ mod tests {
         assert_eq!(stats.0, 0, "Registro deve ter sido removido do SQLite");
 
         // Limpeza
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_is_processed_word_boundary_anti_substring_collision() {
+        let unique = format!(
+            "test_db_boundary_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let temp_dir = std::env::temp_dir().join(&unique);
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        let db_path = temp_dir.join("test.db");
+        let db = Database::open(db_path.to_str().unwrap()).unwrap();
+
+        // Cria o arquivo físico "Ivan Lins - Somos todos iguais nesta noite.mp3"
+        let existing_file = "Ivan Lins - Somos todos iguais nesta noite";
+        let mp3_path = temp_dir.join(format!("{}.mp3", existing_file));
+        fs::write(&mp3_path, vec![0u8; 600 * 1024]).unwrap();
+
+        // 1. "A Noite" NÃO deve casar como substring dentro de "nesta noite"
+        let short_title = "Ivan Lins - A Noite";
+        let processed = db
+            .is_processed(short_title, temp_dir.to_str().unwrap())
+            .unwrap();
+        assert!(
+            !processed,
+            "'A Noite' não deve colidir como substring de 'nesta noite'"
+        );
+
+        // 2. A faixa real existente DEVE ser reconhecida
+        let real_match = db
+            .is_processed(existing_file, temp_dir.to_str().unwrap())
+            .unwrap();
+        assert!(
+            real_match,
+            "A faixa real idêntica deve ser reconhecida no disco"
+        );
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_reconcile_with_disk_restores_missing_files_and_preserves_distinct_tracks() {
+        let unique = format!(
+            "test_db_reconcile_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let temp_dir = std::env::temp_dir().join(&unique);
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        let db_path = temp_dir.join("test.db");
+        let db = Database::open(db_path.to_str().unwrap()).unwrap();
+
+        // 1. Faixa com nome compartilhado menor (ex: Gilberto Gil - Estrela)
+        let track1 = "Gilberto Gil - Estrela";
+        db.record(track1, "SUCESSO").unwrap();
+        let mp3_1 = temp_dir.join(format!("{}.mp3", track1));
+        fs::write(&mp3_1, vec![0u8; 600 * 1024]).unwrap();
+
+        // 2. Faixa mais longa com palavras em comum no disco (ex: Gilberto Gil - Amarra o teu arado a uma estrela)
+        let track2 = "Gilberto Gil - Amarra o teu arado a uma estrela";
+        let mp3_2 = temp_dir.join(format!("{}.mp3", track2));
+        fs::write(&mp3_2, vec![0u8; 600 * 1024]).unwrap();
+
+        // Executa reconciliação
+        db.reconcile_with_disk(temp_dir.to_str().unwrap()).unwrap();
+
+        // Ambas as faixas DEVEM existir no banco como SUCESSO
+        let (suc_after, _, _, _) = db.get_stats().unwrap();
+        assert_eq!(suc_after, 2, "Ambas as faixas devem existir no banco");
+
+        let all_hist = db.get_all_history().unwrap();
+        let titles: Vec<String> = all_hist.into_iter().map(|h| h.0).collect();
+        assert!(titles.contains(&track1.to_string()));
+        assert!(titles.contains(&track2.to_string()));
+
+        // 3. Faixa no banco cujo arquivo físico foi removido deve transicionar para AUSENTE
+        let ghost = "Missing Artist - Missing Track";
+        db.record(ghost, "SUCESSO").unwrap();
+        let (suc_ghost, _, _, mis_before) = db.get_stats().unwrap();
+        assert_eq!(suc_ghost, 3);
+        assert_eq!(mis_before, 0);
+
+        db.reconcile_with_disk(temp_dir.to_str().unwrap()).unwrap();
+
+        let (suc_final, _, _, mis_after) = db.get_stats().unwrap();
+        assert_eq!(
+            suc_final, 2,
+            "Apenas as 2 faixas com arquivo físico devem ser SUCESSO"
+        );
+        assert_eq!(
+            mis_after, 1,
+            "A faixa sem arquivo físico deve ser marcada como AUSENTE"
+        );
+
         let _ = fs::remove_dir_all(&temp_dir);
     }
 }

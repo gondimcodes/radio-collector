@@ -91,7 +91,7 @@ chmod 0644 /etc/systemd/system/radio-collector.service
 ```
 
 > [!NOTE]
-> **Permissão em `/home/` (`ProtectHome=false`)**: Se o seu `output_dir` estiver dentro do diretório `/home/` (ex: `/home/gondim/Músicas/kakarecos`), garanta que a diretiva `ProtectHome=false` esteja presente em `/etc/systemd/system/radio-collector.service`, caso contrário o systemd impedirá o `yt-dlp` de gravar os arquivos MP3.
+> **Permissão em `/home/` (`ProtectHome=false`)**: Se o seu `output_dir` estiver dentro do diretório `/home/` (ex: `/home/usuario/Musicas`), garanta que a diretiva `ProtectHome=false` esteja presente em `/etc/systemd/system/radio-collector.service`, caso contrário o systemd impedirá o `yt-dlp` de gravar os arquivos MP3.
 
 2. Ative e inicie o serviço:
 ```bash

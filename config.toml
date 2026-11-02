@@ -12,6 +12,8 @@ timeout_seconds = 10
 output_dir = "/var/musicas"
 # Banco SQLite para controle de deduplicação e histórico
 db_path = "/var/lib/radio-collector/musicas.db"
+# Intervalo em segundos para varredura e auto-saneamento de inconsistências com o disco (padrão: 3600 = 1 hora; 0 para desativar)
+reconcile_interval_seconds = 3600
 
 [download]
 ytdlp_path = "/usr/local/bin/yt-dlp"

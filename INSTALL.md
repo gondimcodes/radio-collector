@@ -91,7 +91,7 @@ chmod 0644 /etc/systemd/system/radio-collector.service
 ```
 
 > [!NOTE]
-> **Filesystem Permissions under `/home/` (`ProtectHome=false`)**: If your `output_dir` resides within a user directory under `/home/` (e.g., `/home/gondim/Músicas/kakarecos`), ensure that `ProtectHome=false` is set in `/etc/systemd/system/radio-collector.service`. Otherwise, systemd will prevent `yt-dlp` from writing files to disk.
+> **Filesystem Permissions under `/home/` (`ProtectHome=false`)**: If your `output_dir` resides within a user directory under `/home/` (e.g., `/home/user/Music`), ensure that `ProtectHome=false` is set in `/etc/systemd/system/radio-collector.service`. Otherwise, systemd will prevent `yt-dlp` from writing files to disk.
 
 2. Reload systemd and enable the service:
 ```bash

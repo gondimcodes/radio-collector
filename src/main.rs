@@ -137,10 +137,11 @@ async fn main() -> Result<()> {
         }
 
         let mut state = TuiState::new(&cfg.stream.url, &cfg.storage.output_dir);
-        let (success, failed, cached) = db.get_stats().unwrap_or((0, 0, 0));
+        let (success, failed, _, missing) = db.get_stats().unwrap_or((0, 0, 0, 0));
         state.total_success = success;
         state.total_failed = failed;
-        state.total_cached = cached;
+        state.total_missing = missing;
+        state.total_cached = 0;
 
         // Pré-carrega o acervo completo do SQLite para navegação e paginação irrestrita
         if let Ok(all_history) = db.get_all_history() {
@@ -151,6 +152,7 @@ async fn main() -> Result<()> {
                     "PENDENTE" => HistoryStatus::Pending,
                     "CACHE" => HistoryStatus::Cached,
                     "IGNORADO" => HistoryStatus::Ignored,
+                    "AUSENTE" => HistoryStatus::Missing,
                     _ => HistoryStatus::Failed,
                 };
                 state.history.insert(
@@ -243,8 +245,21 @@ async fn run_observer(
     let mut last_processed_event_id = initial_event_id;
     let mut check_counter: u32 = 0;
     let interval = Duration::from_millis(500);
+    let mut last_reconcile = tokio::time::Instant::now();
+    let reconcile_interval = Duration::from_secs(cfg.storage.reconcile_interval_seconds);
 
     loop {
+        // Varridura periódica e assíncrona de reconciliação com o disco (configurável via config.toml)
+        if cfg.storage.reconcile_interval_seconds > 0
+            && last_reconcile.elapsed() >= reconcile_interval
+        {
+            last_reconcile = tokio::time::Instant::now();
+            let db_clone = Arc::clone(&db);
+            let out_dir = cfg.storage.output_dir.clone();
+            tokio::task::spawn_blocking(move || {
+                let _ = db_clone.reconcile_with_disk(&out_dir);
+            });
+        }
         // A cada ~10 segundos (20 iterações de 500ms), afere a conexão do stream para status do cabeçalho
         if check_counter.is_multiple_of(20) {
             let now = chrono::Local::now().format("%H:%M:%S").to_string();
@@ -359,8 +374,21 @@ async fn run_worker(
 
     let mut last_title = String::new();
     let interval = Duration::from_secs(cfg.stream.check_interval_seconds);
+    let mut last_reconcile = tokio::time::Instant::now();
+    let reconcile_interval = Duration::from_secs(cfg.storage.reconcile_interval_seconds);
 
     loop {
+        // Varridura periódica e assíncrona de reconciliação com o disco (configurável via config.toml)
+        if cfg.storage.reconcile_interval_seconds > 0
+            && last_reconcile.elapsed() >= reconcile_interval
+        {
+            last_reconcile = tokio::time::Instant::now();
+            let db_clone = Arc::clone(&db);
+            let out_dir = cfg.storage.output_dir.clone();
+            tokio::task::spawn_blocking(move || {
+                let _ = db_clone.reconcile_with_disk(&out_dir);
+            });
+        }
         // Se a TUI estava coletando e o serviço systemd iniciou em background,
         // a TUI cede o controle imediatamente e transiciona para Modo Observador.
         if !is_daemon {
