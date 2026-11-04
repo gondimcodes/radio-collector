@@ -97,23 +97,13 @@ impl Database {
 
         let mut matched_db_ids = std::collections::HashSet::new();
 
-        // 2. Reconciliação Disco -> Banco
+        // 2. Reconciliação Disco -> Banco com casamento fonográfico estrito
         for file_stem in &disk_stems {
-            let norm_stem = Self::normalize(file_stem);
-            let padded_stem = format!(" {} ", norm_stem);
-
             let mut matched = false;
 
-            // Casamento exato, case-insensitive ou bloco de título completo contido no nome do arquivo
+            // Casamento exato, normalizado ou sem sufixo de mídia
             for (id, titulo, status) in &rows {
-                let norm_tit = Self::normalize(titulo);
-                let padded_tit = format!(" {} ", norm_tit);
-
-                let is_match = norm_stem == norm_tit
-                    || file_stem.eq_ignore_ascii_case(titulo)
-                    || padded_stem.contains(&padded_tit);
-
-                if is_match {
+                if Self::is_matching_audio_file(file_stem, titulo) {
                     matched = true;
                     matched_db_ids.insert(*id);
                     if status != "SUCESSO" {
@@ -193,9 +183,7 @@ impl Database {
             }
         }
 
-        // 2. Checagem no sistema de arquivos com casamento estrito de Artista + Música
-        let norm_full_title = Self::normalize(title);
-
+        // 2. Checagem no sistema de arquivos com casamento estrito
         let dest_path = Path::new(dest_dir);
         if dest_path.exists() {
             if let Ok(entries) = fs::read_dir(dest_path) {
@@ -212,16 +200,7 @@ impl Database {
                         .file_stem()
                         .map(|s| s.to_string_lossy().to_string())
                         .unwrap_or_default();
-                    let norm_fname = Self::normalize(&file_stem);
-                    let padded_fname = format!(" {} ", norm_fname);
-                    let padded_artist = format!(" {} ", artist_part);
-                    let padded_track = format!(" {} ", track_part);
-                    let is_match = norm_fname == norm_full_title
-                        || (!artist_part.is_empty()
-                            && !track_part.is_empty()
-                            && padded_fname.contains(&padded_artist)
-                            && padded_fname.contains(&padded_track));
-                    if is_match {
+                    if Self::is_matching_audio_file(&file_stem, title) {
                         let _ = self.record(title, "SUCESSO");
                         return Ok(true);
                     }
@@ -321,7 +300,6 @@ impl Database {
     pub fn delete_track(&self, title: &str, dest_dir: &str) -> Result<()> {
         self.delete_track_record_only(title)?;
 
-        let norm_full_title = Self::normalize(title);
         let dest_path = Path::new(dest_dir);
         if dest_path.exists() {
             if let Ok(entries) = fs::read_dir(dest_path) {
@@ -338,10 +316,9 @@ impl Database {
                         .file_stem()
                         .map(|s| s.to_string_lossy().to_string())
                         .unwrap_or_default();
-                    let norm_stem = Self::normalize(&file_stem);
 
-                    // Deleta apenas se coincidir com o título normalizado ou título exato
-                    if norm_stem == norm_full_title || file_stem.eq_ignore_ascii_case(title) {
+                    // Deleta apenas se coincidir estritamente com a faixa auditada
+                    if Self::is_matching_audio_file(&file_stem, title) {
                         let _ = fs::remove_file(&path);
                     }
                 }
@@ -425,6 +402,49 @@ impl Database {
             }
         }
         result.split_whitespace().collect::<Vec<_>>().join(" ")
+    }
+
+    /// Compara se o nome de um arquivo físico no disco (sem extensão) corresponde
+    /// estritamente ao título da faixa, eliminando colisões falsas por substrings.
+    pub fn is_matching_audio_file(file_stem: &str, title: &str) -> bool {
+        // 1. Igualdade exata insensível a maiúsculas/minúsculas
+        if file_stem.eq_ignore_ascii_case(title) {
+            return true;
+        }
+
+        let norm_stem = Self::normalize(file_stem);
+        let norm_title = Self::normalize(title);
+
+        // 2. Igualdade exata das strings normalizadas (sem acentos, pontuação, múltiplos espaços)
+        if norm_stem == norm_title {
+            return true;
+        }
+
+        // 3. Remoção de sufixos de mídia/versão em parênteses ou colchetes no nome do arquivo físico
+        // Ex: "Djavan - Se (Áudio Oficial)" -> "Djavan - Se"
+        let clean_stem = if let Some(idx) = file_stem.find(|c| c == '(' || c == '[') {
+            file_stem[..idx].trim()
+        } else {
+            file_stem.trim()
+        };
+        let norm_clean_stem = Self::normalize(clean_stem);
+        if norm_clean_stem == norm_title {
+            return true;
+        }
+
+        // 4. Remoção de sufixos de mídia/versão no título pesquisado
+        // Ex: se o título for "Paul McCartney - Let 'Em In (with Wings)" e o arquivo for "Paul McCartney - Let 'Em In.mp3"
+        let clean_title = if let Some(idx) = title.find(|c| c == '(' || c == '[') {
+            title[..idx].trim()
+        } else {
+            title.trim()
+        };
+        let norm_clean_title = Self::normalize(clean_title);
+        if norm_stem == norm_clean_title || norm_clean_stem == norm_clean_title {
+            return true;
+        }
+
+        false
     }
 }
 
@@ -571,5 +591,26 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_is_matching_audio_file_strict_anti_substring() {
+        // Casos que DEVEM casar:
+        assert!(Database::is_matching_audio_file("Djavan - Se", "Djavan - Se"));
+        assert!(Database::is_matching_audio_file("djavan - se", "Djavan - Se"));
+        assert!(Database::is_matching_audio_file("Djavan - Se (Áudio Oficial)", "Djavan - Se"));
+        assert!(Database::is_matching_audio_file("Djavan - Se [Official Audio]", "Djavan - Se"));
+        assert!(Database::is_matching_audio_file("Paul McCartney - Let 'Em In", "Paul McCartney - Let 'Em In (with Wings)"));
+        assert!(Database::is_matching_audio_file("Paul McCartney - Let 'Em In (with Wings)", "Paul McCartney - Let 'Em In"));
+        assert!(Database::is_matching_audio_file("Nikka Costa - (Out Here) On My Own", "Nikka Costa - (Out Here) On My Own"));
+
+        // Casos de regressão que NUNCA DEVEM casar (bug crítico do Djavan - Se):
+        assert!(!Database::is_matching_audio_file("Djavan - Seduzir", "Djavan - Se"));
+        assert!(!Database::is_matching_audio_file("Djavan - Segredo", "Djavan - Se"));
+        assert!(!Database::is_matching_audio_file("Djavan - Se Eu Não Te Amasse Tanto Assim", "Djavan - Se"));
+        assert!(!Database::is_matching_audio_file("Djavan - Esse Brilho Em Teu Olhar", "Djavan - Se"));
+        assert!(!Database::is_matching_audio_file("Queen - Love of My Life", "Queen - Love"));
+        assert!(!Database::is_matching_audio_file("Gilberto Gil - Amarra o teu arado a uma estrela", "Gilberto Gil - Estrela"));
+        assert!(!Database::is_matching_audio_file("Ivan Lins - Somos todos iguais nesta noite", "Ivan Lins - A Noite"));
     }
 }

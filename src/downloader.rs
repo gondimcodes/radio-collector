@@ -50,8 +50,7 @@ impl Downloader {
         // Busca direcionada ao canal do artista gerado pela gravadora com assinatura fonográfica internacional
         let topic_query = format!("ytsearch5:\"{}\" topic", title);
         let topic_filters = [
-            "!is_live & duration <=? 1200 & channel ~= '(?i)- Topic$'",
-            "!is_live & duration <=? 1200 & description ~= '(?i)Provided to YouTube'",
+            "!is_live & duration <=? 1200 & (channel ~= '(?i)- Topic$' | description ~= '(?i)Provided to YouTube')",
         ];
         if self
             .run_ytdlp_attempt(title, &topic_query, &topic_filters, &output_template)
@@ -242,24 +241,18 @@ impl Downloader {
     }
 
     fn cleanup_leftovers(title: &str, dest_dir: &str) {
-        let parts: Vec<&str> = title.splitn(2, '-').collect();
-        let (artist_part, track_part) = if parts.len() == 2 {
-            (Database::normalize(parts[0]), Database::normalize(parts[1]))
-        } else {
-            (String::new(), Database::normalize(title))
-        };
-        let norm_full_title = Database::normalize(title);
-
         let dest_path = Path::new(dest_dir);
         if let Ok(entries) = fs::read_dir(dest_path) {
             for entry in entries.flatten() {
                 let fname = entry.file_name().to_string_lossy().to_string();
                 let lower = fname.to_lowercase();
-                let norm_fname = Database::normalize(&fname);
-                let is_match = (!artist_part.is_empty()
-                    && norm_fname.contains(&artist_part)
-                    && norm_fname.contains(&track_part))
-                    || norm_fname.contains(&norm_full_title);
+                let path = entry.path();
+                let file_stem = path
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_default();
+
+                let is_match = Database::is_matching_audio_file(&file_stem, title);
 
                 if (lower.ends_with(".webm")
                     || lower.ends_with(".webp")
@@ -275,31 +268,25 @@ impl Downloader {
     }
 
     fn verify_file_integrity(title: &str, dest_dir: &str) -> Result<()> {
-        let parts: Vec<&str> = title.splitn(2, '-').collect();
-        let (artist_part, track_part) = if parts.len() == 2 {
-            (Database::normalize(parts[0]), Database::normalize(parts[1]))
-        } else {
-            (String::new(), Database::normalize(title))
-        };
-        let norm_full_title = Database::normalize(title);
-
         let dest_path = Path::new(dest_dir);
         if !dest_path.exists() {
             bail!("Diretório de destino não existe: {}", dest_dir);
         }
 
-        // Limpeza de arquivos temporários (.part ou .ytdl) que possam ter ficado
+        // Limpeza de arquivos temporários (.part ou .ytdl) que possam ter ficado para esta faixa específica
         if let Ok(entries) = fs::read_dir(dest_path) {
             for entry in entries.flatten() {
                 let fname = entry.file_name().to_string_lossy().to_string();
                 let lower = fname.to_lowercase();
-                let norm_fname = Database::normalize(&fname);
-                let is_match = (!artist_part.is_empty()
-                    && norm_fname.contains(&artist_part)
-                    && norm_fname.contains(&track_part))
-                    || norm_fname.contains(&norm_full_title);
+                let path = entry.path();
+                let file_stem = path
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_default();
 
-                if (lower.ends_with(".part") || lower.ends_with(".ytdl")) && is_match {
+                if (lower.ends_with(".part") || lower.ends_with(".ytdl"))
+                    && Database::is_matching_audio_file(&file_stem, title)
+                {
                     let _ = fs::remove_file(entry.path());
                     bail!("Download incompleto (arquivo temporário .part detectado e removido)");
                 }
@@ -312,14 +299,20 @@ impl Downloader {
 
         if let Ok(entries) = fs::read_dir(dest_path) {
             for entry in entries.flatten() {
-                let fname = entry.file_name().to_string_lossy().to_string();
-                let norm_fname = Database::normalize(&fname);
-                let is_match = (!artist_part.is_empty()
-                    && norm_fname.contains(&artist_part)
-                    && norm_fname.contains(&track_part))
-                    || norm_fname.contains(&norm_full_title);
+                let path = entry.path();
+                let is_mp3 = path
+                    .extension()
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("mp3"));
+                if !is_mp3 {
+                    continue;
+                }
 
-                if fname.to_lowercase().ends_with(".mp3") && is_match {
+                let file_stem = path
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_default();
+
+                if Database::is_matching_audio_file(&file_stem, title) {
                     if let Ok(meta) = entry.metadata() {
                         if meta.len() >= MIN_VALID_MP3_SIZE {
                             found_valid = true;
@@ -390,5 +383,13 @@ mod tests {
         assert!(!pattern.is_match("Manchester - Surprise"));
         assert!(!pattern.is_match("Major Harris - Love Won't Let Me Wait"));
         assert!(!pattern.is_match("Air Supply - All Out Of Love"));
+    }
+
+    #[test]
+    fn test_topic_filter_disjunction_syntax() {
+        let filter = "!is_live & duration <=? 1200 & (channel ~= '(?i)- Topic$' | description ~= '(?i)Provided to YouTube')";
+        assert!(filter.contains('|'));
+        assert!(filter.contains("(?i)- Topic$'"));
+        assert!(filter.contains("(?i)Provided to YouTube'"));
     }
 }

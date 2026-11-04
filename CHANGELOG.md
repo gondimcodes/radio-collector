@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.4.1] - 2026-11-04
+
+### Fixed
+- **False Positive Post-Download & Anti-Substring File Matching (`Database::is_matching_audio_file`)**:
+  - Fixed critical bug where short titles (e.g., *Djavan - Se*) falsely matched unrelated pre-existing MP3 files by the same artist containing the substring (e.g., *Djavan - Seduzir*, *Djavan - Segredo*), tricking `verify_file_integrity` into reporting a false success without downloading the actual file.
+  - Centralized file-to-track matching in `Database::is_matching_audio_file`, strictly comparing exact and normalized stems while stripping only standardized parenthetical version/media suffixes (e.g., `(Áudio Oficial)`, `[Official Audio]`).
+  - Replaced fragile substring search with strict matching across `verify_file_integrity`, `cleanup_leftovers`, `is_processed`, `delete_track`, and `reconcile_with_disk`.
+- **Disjunctive Official Topic Filter in Stage 1 (`yt-dlp`)**:
+  - Fixed `--match-filter` in Stage 1 to use disjunction `|` (OR) within a single argument (`(channel ~= '(?i)- Topic$' | description ~= '(?i)Provided to YouTube')`) instead of multiple separate arguments that `yt-dlp` treated as a conjunctive AND condition, unblocking official artist channel releases.
+
+### Added
+- **Automated Regression Tests**:
+  - Added `test_is_matching_audio_file_strict_anti_substring` in `src/db.rs` covering short title collisions and parenthetical media suffixes.
+  - Added `test_topic_filter_disjunction_syntax` in `src/downloader.rs`.
+
+---
+
 ## [1.4.0] - 2026-11-02
 
 ### Added
