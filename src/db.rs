@@ -422,7 +422,7 @@ impl Database {
 
         // 3. Remoção de sufixos de mídia/versão em parênteses ou colchetes no nome do arquivo físico
         // Ex: "Djavan - Se (Áudio Oficial)" -> "Djavan - Se"
-        let clean_stem = if let Some(idx) = file_stem.find(|c| c == '(' || c == '[') {
+        let clean_stem = if let Some(idx) = file_stem.find(['(', '[']) {
             file_stem[..idx].trim()
         } else {
             file_stem.trim()
@@ -434,7 +434,7 @@ impl Database {
 
         // 4. Remoção de sufixos de mídia/versão no título pesquisado
         // Ex: se o título for "Paul McCartney - Let 'Em In (with Wings)" e o arquivo for "Paul McCartney - Let 'Em In.mp3"
-        let clean_title = if let Some(idx) = title.find(|c| c == '(' || c == '[') {
+        let clean_title = if let Some(idx) = title.find(['(', '[']) {
             title[..idx].trim()
         } else {
             title.trim()
