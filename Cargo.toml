@@ -1,6 +1,6 @@
 [package]
 name = "radio-collector"
-version = "1.4.1"
+version = "1.4.2"
 edition = "2021"
 authors = ["gondim <gondim@gmail.com>"]
 description = "Coletor inteligente de faixas de rádio online com TUI e download via yt-dlp"
@@ -16,7 +16,7 @@ crossterm = { version = "0.28", features = ["event-stream"] }
 serde = { version = "1.0", features = ["derive"] }
 toml = "0.8"
 clap = { version = "4", features = ["derive"] }
-rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite = { version = "0.42", features = ["bundled"] }
 regex = "1"
 chrono = { version = "0.4", features = ["serde"] }
 anyhow = "1.0"

@@ -47,12 +47,16 @@ impl TrackHistoryItem {
         }
     }
 
-    pub fn display_track_and_details(&self) -> String {
+    pub fn display_track_and_details(&self) -> std::borrow::Cow<'_, str> {
         match &self.details {
-            Some(d) if self.status == HistoryStatus::Failed => format!("{} ({})", self.title, d),
-            Some(d) if self.status == HistoryStatus::Ignored => format!("{} [{}]", self.title, d),
-            Some(d) => format!("{} - {}", self.title, d),
-            None => self.title.clone(),
+            Some(d) if self.status == HistoryStatus::Failed => {
+                std::borrow::Cow::Owned(format!("{} ({})", self.title, d))
+            }
+            Some(d) if self.status == HistoryStatus::Ignored => {
+                std::borrow::Cow::Owned(format!("{} [{}]", self.title, d))
+            }
+            Some(d) => std::borrow::Cow::Owned(format!("{} - {}", self.title, d)),
+            None => std::borrow::Cow::Borrowed(&self.title),
         }
     }
 }

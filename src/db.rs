@@ -338,8 +338,8 @@ impl Database {
         let mut stmt = conn.prepare("SELECT status, COUNT(*) FROM historico GROUP BY status")?;
         let rows = stmt.query_map([], |row| {
             let status: String = row.get(0)?;
-            let count: usize = row.get(1)?;
-            Ok((status, count))
+            let count: i64 = row.get(1)?;
+            Ok((status, count as usize))
         })?;
 
         for r in rows.flatten() {
@@ -596,21 +596,63 @@ mod tests {
     #[test]
     fn test_is_matching_audio_file_strict_anti_substring() {
         // Casos que DEVEM casar:
-        assert!(Database::is_matching_audio_file("Djavan - Se", "Djavan - Se"));
-        assert!(Database::is_matching_audio_file("djavan - se", "Djavan - Se"));
-        assert!(Database::is_matching_audio_file("Djavan - Se (Áudio Oficial)", "Djavan - Se"));
-        assert!(Database::is_matching_audio_file("Djavan - Se [Official Audio]", "Djavan - Se"));
-        assert!(Database::is_matching_audio_file("Paul McCartney - Let 'Em In", "Paul McCartney - Let 'Em In (with Wings)"));
-        assert!(Database::is_matching_audio_file("Paul McCartney - Let 'Em In (with Wings)", "Paul McCartney - Let 'Em In"));
-        assert!(Database::is_matching_audio_file("Nikka Costa - (Out Here) On My Own", "Nikka Costa - (Out Here) On My Own"));
+        assert!(Database::is_matching_audio_file(
+            "Djavan - Se",
+            "Djavan - Se"
+        ));
+        assert!(Database::is_matching_audio_file(
+            "djavan - se",
+            "Djavan - Se"
+        ));
+        assert!(Database::is_matching_audio_file(
+            "Djavan - Se (Áudio Oficial)",
+            "Djavan - Se"
+        ));
+        assert!(Database::is_matching_audio_file(
+            "Djavan - Se [Official Audio]",
+            "Djavan - Se"
+        ));
+        assert!(Database::is_matching_audio_file(
+            "Paul McCartney - Let 'Em In",
+            "Paul McCartney - Let 'Em In (with Wings)"
+        ));
+        assert!(Database::is_matching_audio_file(
+            "Paul McCartney - Let 'Em In (with Wings)",
+            "Paul McCartney - Let 'Em In"
+        ));
+        assert!(Database::is_matching_audio_file(
+            "Nikka Costa - (Out Here) On My Own",
+            "Nikka Costa - (Out Here) On My Own"
+        ));
 
         // Casos de regressão que NUNCA DEVEM casar (bug crítico do Djavan - Se):
-        assert!(!Database::is_matching_audio_file("Djavan - Seduzir", "Djavan - Se"));
-        assert!(!Database::is_matching_audio_file("Djavan - Segredo", "Djavan - Se"));
-        assert!(!Database::is_matching_audio_file("Djavan - Se Eu Não Te Amasse Tanto Assim", "Djavan - Se"));
-        assert!(!Database::is_matching_audio_file("Djavan - Esse Brilho Em Teu Olhar", "Djavan - Se"));
-        assert!(!Database::is_matching_audio_file("Queen - Love of My Life", "Queen - Love"));
-        assert!(!Database::is_matching_audio_file("Gilberto Gil - Amarra o teu arado a uma estrela", "Gilberto Gil - Estrela"));
-        assert!(!Database::is_matching_audio_file("Ivan Lins - Somos todos iguais nesta noite", "Ivan Lins - A Noite"));
+        assert!(!Database::is_matching_audio_file(
+            "Djavan - Seduzir",
+            "Djavan - Se"
+        ));
+        assert!(!Database::is_matching_audio_file(
+            "Djavan - Segredo",
+            "Djavan - Se"
+        ));
+        assert!(!Database::is_matching_audio_file(
+            "Djavan - Se Eu Não Te Amasse Tanto Assim",
+            "Djavan - Se"
+        ));
+        assert!(!Database::is_matching_audio_file(
+            "Djavan - Esse Brilho Em Teu Olhar",
+            "Djavan - Se"
+        ));
+        assert!(!Database::is_matching_audio_file(
+            "Queen - Love of My Life",
+            "Queen - Love"
+        ));
+        assert!(!Database::is_matching_audio_file(
+            "Gilberto Gil - Amarra o teu arado a uma estrela",
+            "Gilberto Gil - Estrela"
+        ));
+        assert!(!Database::is_matching_audio_file(
+            "Ivan Lins - Somos todos iguais nesta noite",
+            "Ivan Lins - A Noite"
+        ));
     }
 }

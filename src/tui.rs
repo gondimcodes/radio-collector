@@ -39,6 +39,7 @@ pub struct TuiState {
     pub total_missing: usize,
     pub total_ignored: usize,
     pub total_failed: usize,
+    pub total_disk: usize,
     pub search_query: String,
     pub search_mode: bool,
 }
@@ -47,6 +48,7 @@ impl TuiState {
     pub fn new(radio_url: &str, output_dir: &str) -> Self {
         let mut table_state = TableState::default();
         table_state.select(Some(0));
+        let total_disk = count_mp3_files(output_dir);
 
         Self {
             radio_url: radio_url.to_string(),
@@ -66,8 +68,19 @@ impl TuiState {
             total_missing: 0,
             total_ignored: 0,
             total_failed: 0,
+            total_disk,
             search_query: String::new(),
             search_mode: false,
+        }
+    }
+
+    pub fn refresh_disk_count(&mut self) -> bool {
+        let count = count_mp3_files(&self.output_dir);
+        if count != self.total_disk {
+            self.total_disk = count;
+            true
+        } else {
+            false
         }
     }
 
@@ -185,6 +198,7 @@ impl TuiState {
                 let _ = db.delete_track(&full_title, &self.output_dir);
                 if item.status == HistoryStatus::Success && self.total_success > 0 {
                     self.total_success -= 1;
+                    self.total_disk = self.total_disk.saturating_sub(1);
                 } else if item.status == HistoryStatus::Failed && self.total_failed > 0 {
                     self.total_failed -= 1;
                 } else if item.status == HistoryStatus::Missing && self.total_missing > 0 {
@@ -277,6 +291,7 @@ impl TuiState {
 
                 if success {
                     self.total_success += 1;
+                    self.total_disk += 1;
                     let had_failure = self.history.iter().any(|item| {
                         (item.status == HistoryStatus::Failed
                             || item.status == HistoryStatus::Downloading)
@@ -365,209 +380,240 @@ pub async fn run_tui(
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
+    let mut needs_redraw = true;
+    let mut last_tick = std::time::Instant::now();
+    let mut last_disk_check = std::time::Instant::now();
+    let tick_interval = Duration::from_millis(500);
+    let disk_interval = Duration::from_secs(10);
+
     loop {
         // 1. Processa eventos pendentes do canal
         while let Ok(event) = event_rx.try_recv() {
             state.handle_event(event);
             state.refresh_stats(&db);
+            needs_redraw = true;
         }
 
-        // 2. Renderiza frame com estado da tabela mutável
-        terminal.draw(|f| render_ui(f, &mut state))?;
+        // 2. Aferição periódica do disco a cada 10s para consistência com agentes externos
+        if last_disk_check.elapsed() >= disk_interval {
+            last_disk_check = std::time::Instant::now();
+            if state.refresh_disk_count() {
+                needs_redraw = true;
+            }
+        }
 
-        // 3. Captura teclado de forma não-bloqueante
+        // 3. Heartbeat a cada 500ms para atualização de relógio do cabeçalho
+        if last_tick.elapsed() >= tick_interval {
+            last_tick = std::time::Instant::now();
+            needs_redraw = true;
+        }
+
+        // 4. Renderiza frame apenas sob demanda (elimina 100% de redesenhos ociosos)
+        if needs_redraw {
+            terminal.draw(|f| render_ui(f, &mut state))?;
+            needs_redraw = false;
+        }
+
+        // 5. Captura teclado e redimensionamento de forma não-bloqueante
         if event::poll(Duration::from_millis(50))? {
-            if let Event::Key(key) = event::read()? {
-                if state.search_mode {
-                    match key.code {
-                        KeyCode::Enter => {
-                            state.search_mode = false;
+            match event::read()? {
+                Event::Key(key) => {
+                    needs_redraw = true;
+                    if state.search_mode {
+                        match key.code {
+                            KeyCode::Enter => {
+                                state.search_mode = false;
+                            }
+                            KeyCode::Esc => {
+                                state.search_query.clear();
+                                state.search_mode = false;
+                                state.table_state.select(Some(0));
+                            }
+                            KeyCode::Backspace => {
+                                state.search_query.pop();
+                                state.table_state.select(Some(0));
+                            }
+                            KeyCode::Char(c) => {
+                                state.search_query.push(c);
+                                state.table_state.select(Some(0));
+                            }
+                            _ => {}
                         }
-                        KeyCode::Esc => {
-                            state.search_query.clear();
-                            state.search_mode = false;
-                            state.table_state.select(Some(0));
-                        }
-                        KeyCode::Backspace => {
-                            state.search_query.pop();
-                            state.table_state.select(Some(0));
-                        }
-                        KeyCode::Char(c) => {
-                            state.search_query.push(c);
-                            state.table_state.select(Some(0));
-                        }
-                        _ => {}
-                    }
-                } else if state.pending_action.is_some() {
-                    match key.code {
-                        KeyCode::Char('b') | KeyCode::Char('B') | KeyCode::Enter => {
-                            // Baixar faixa pendente
-                            if let Some((idx, full_title)) = state.pending_action.take() {
-                                if idx < state.history.len() {
-                                    state.history[idx].status = HistoryStatus::Downloading;
-                                    state.history[idx].time = chrono::Local::now()
-                                        .format("%d/%m/%Y %H:%M:%S")
-                                        .to_string();
-                                    let db_clone = Arc::clone(&db);
-                                    let dl_clone = Arc::clone(&downloader);
-                                    let title_clone = full_title.clone();
-                                    let tx_clone = event_tx.clone();
-                                    tokio::spawn(async move {
-                                        let _ =
-                                            db_clone.record_event("DOWNLOAD_START", &title_clone);
-                                        match dl_clone.download(&title_clone).await {
-                                            Ok(()) => {
-                                                let _ = db_clone.record(&title_clone, "SUCESSO");
-                                                let _ = db_clone.record_event(
-                                                    "DOWNLOAD_FINISH",
-                                                    &format!("OK|{}", title_clone),
-                                                );
-                                                let _ = tx_clone
-                                                    .send(CollectorEvent::DownloadFinished {
-                                                        title: title_clone,
-                                                        success: true,
-                                                        message: "OK".to_string(),
-                                                    })
-                                                    .await;
+                    } else if state.pending_action.is_some() {
+                        match key.code {
+                            KeyCode::Char('b') | KeyCode::Char('B') | KeyCode::Enter => {
+                                // Baixar faixa pendente
+                                if let Some((idx, full_title)) = state.pending_action.take() {
+                                    if idx < state.history.len() {
+                                        state.history[idx].status = HistoryStatus::Downloading;
+                                        state.history[idx].time = chrono::Local::now()
+                                            .format("%d/%m/%Y %H:%M:%S")
+                                            .to_string();
+                                        let db_clone = Arc::clone(&db);
+                                        let dl_clone = Arc::clone(&downloader);
+                                        let title_clone = full_title.clone();
+                                        let tx_clone = event_tx.clone();
+                                        tokio::spawn(async move {
+                                            let _ = db_clone
+                                                .record_event("DOWNLOAD_START", &title_clone);
+                                            match dl_clone.download(&title_clone).await {
+                                                Ok(()) => {
+                                                    let _ =
+                                                        db_clone.record(&title_clone, "SUCESSO");
+                                                    let _ = db_clone.record_event(
+                                                        "DOWNLOAD_FINISH",
+                                                        &format!("OK|{}", title_clone),
+                                                    );
+                                                    let _ = tx_clone
+                                                        .send(CollectorEvent::DownloadFinished {
+                                                            title: title_clone,
+                                                            success: true,
+                                                            message: "OK".to_string(),
+                                                        })
+                                                        .await;
+                                                }
+                                                Err(e) => {
+                                                    let err_msg = e.to_string();
+                                                    let _ = db_clone.record(&title_clone, "FALHA");
+                                                    let _ = db_clone.record_event(
+                                                        "DOWNLOAD_FINISH",
+                                                        &format!("ERR|{}|{}", err_msg, title_clone),
+                                                    );
+                                                    let _ = tx_clone
+                                                        .send(CollectorEvent::DownloadFinished {
+                                                            title: title_clone,
+                                                            success: false,
+                                                            message: err_msg,
+                                                        })
+                                                        .await;
+                                                }
                                             }
-                                            Err(e) => {
-                                                let err_msg = e.to_string();
-                                                let _ = db_clone.record(&title_clone, "FALHA");
-                                                let _ = db_clone.record_event(
-                                                    "DOWNLOAD_FINISH",
-                                                    &format!("ERR|{}|{}", err_msg, title_clone),
-                                                );
-                                                let _ = tx_clone
-                                                    .send(CollectorEvent::DownloadFinished {
-                                                        title: title_clone,
-                                                        success: false,
-                                                        message: err_msg,
-                                                    })
-                                                    .await;
-                                            }
-                                        }
-                                    });
+                                        });
+                                    }
                                 }
                             }
-                        }
-                        KeyCode::Char('r') | KeyCode::Char('R') | KeyCode::Delete => {
-                            // Recusar faixa pendente (apenas remove da lista e do SQLite sem apagar arquivo)
-                            if let Some((idx, full_title)) = state.pending_action.take() {
-                                if idx < state.history.len() {
-                                    state.history.remove(idx);
-                                    let _ = db.delete_track_record_only(&full_title);
-                                    let indices = state.filtered_indices();
-                                    if indices.is_empty() {
-                                        state.table_state.select(None);
-                                    } else if let Some(sel) = state.table_state.selected() {
-                                        if sel >= indices.len() {
-                                            state.table_state.select(Some(indices.len() - 1));
+                            KeyCode::Char('r') | KeyCode::Char('R') | KeyCode::Delete => {
+                                // Recusar faixa pendente (apenas remove da lista e do SQLite sem apagar arquivo)
+                                if let Some((idx, full_title)) = state.pending_action.take() {
+                                    if idx < state.history.len() {
+                                        state.history.remove(idx);
+                                        let _ = db.delete_track_record_only(&full_title);
+                                        let indices = state.filtered_indices();
+                                        if indices.is_empty() {
+                                            state.table_state.select(None);
+                                        } else if let Some(sel) = state.table_state.selected() {
+                                            if sel >= indices.len() {
+                                                state.table_state.select(Some(indices.len() - 1));
+                                            }
                                         }
                                     }
                                 }
                             }
+                            KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                                state.cancel_action_or_delete();
+                            }
+                            _ => {}
                         }
-                        KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
-                            state.cancel_action_or_delete();
+                    } else if state.pending_delete.is_some() {
+                        match key.code {
+                            KeyCode::Char('s')
+                            | KeyCode::Char('S')
+                            | KeyCode::Char('y')
+                            | KeyCode::Char('Y')
+                            | KeyCode::Enter => {
+                                state.confirm_delete(&db);
+                            }
+                            KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                                state.cancel_action_or_delete();
+                            }
+                            _ => {}
                         }
-                        _ => {}
-                    }
-                } else if state.pending_delete.is_some() {
-                    match key.code {
-                        KeyCode::Char('s')
-                        | KeyCode::Char('S')
-                        | KeyCode::Char('y')
-                        | KeyCode::Char('Y')
-                        | KeyCode::Enter => {
-                            state.confirm_delete(&db);
-                        }
-                        KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
-                            state.cancel_action_or_delete();
-                        }
-                        _ => {}
-                    }
-                } else {
-                    match key.code {
-                        KeyCode::Char('q') => break,
-                        KeyCode::Esc => {
-                            if !state.search_query.is_empty() {
+                    } else {
+                        match key.code {
+                            KeyCode::Char('q') => break,
+                            KeyCode::Esc => {
+                                if !state.search_query.is_empty() {
+                                    state.search_query.clear();
+                                    state.table_state.select(Some(0));
+                                } else {
+                                    break;
+                                }
+                            }
+                            KeyCode::Char('/') | KeyCode::Char('f') | KeyCode::Char('F') => {
+                                state.search_mode = true;
+                            }
+                            KeyCode::Char('c') | KeyCode::Char('C') => {
                                 state.search_query.clear();
                                 state.table_state.select(Some(0));
-                            } else {
-                                break;
                             }
-                        }
-                        KeyCode::Char('/') | KeyCode::Char('f') | KeyCode::Char('F') => {
-                            state.search_mode = true;
-                        }
-                        KeyCode::Char('c') | KeyCode::Char('C') => {
-                            state.search_query.clear();
-                            state.table_state.select(Some(0));
-                        }
-                        KeyCode::Up | KeyCode::Char('k') => state.previous_row(),
-                        KeyCode::Down | KeyCode::Char('j') => state.next_row(),
-                        KeyCode::PageUp => state.page_up(15),
-                        KeyCode::PageDown => state.page_down(15),
-                        KeyCode::Home => state.first_row(),
-                        KeyCode::End => state.last_row(),
-                        KeyCode::Char('b') | KeyCode::Char('B') | KeyCode::Enter => {
-                            let indices = state.filtered_indices();
-                            if let Some(i) = state.table_state.selected() {
-                                if let Some(&real_idx) = indices.get(i) {
-                                    if real_idx < state.history.len()
-                                        && state.history[real_idx].status == HistoryStatus::Pending
-                                    {
-                                        state.request_action_or_delete();
-                                    }
-                                }
-                            }
-                        }
-                        KeyCode::Char('r') | KeyCode::Char('R') => {
-                            let indices = state.filtered_indices();
-                            if let Some(i) = state.table_state.selected() {
-                                if let Some(&real_idx) = indices.get(i) {
-                                    if real_idx < state.history.len()
-                                        && state.history[real_idx].status == HistoryStatus::Pending
-                                    {
-                                        state.request_action_or_delete();
-                                    }
-                                }
-                            }
-                        }
-                        KeyCode::Char('t') | KeyCode::Char('T') => {
-                            let indices = state.filtered_indices();
-                            if let Some(i) = state.table_state.selected() {
-                                if let Some(&real_idx) = indices.get(i) {
-                                    if real_idx < state.history.len() {
-                                        let item = &state.history[real_idx];
-                                        if item.status == HistoryStatus::Failed
-                                            || item.status == HistoryStatus::Pending
-                                            || item.status == HistoryStatus::Missing
+                            KeyCode::Up | KeyCode::Char('k') => state.previous_row(),
+                            KeyCode::Down | KeyCode::Char('j') => state.next_row(),
+                            KeyCode::PageUp => state.page_up(15),
+                            KeyCode::PageDown => state.page_down(15),
+                            KeyCode::Home => state.first_row(),
+                            KeyCode::End => state.last_row(),
+                            KeyCode::Char('b') | KeyCode::Char('B') | KeyCode::Enter => {
+                                let indices = state.filtered_indices();
+                                if let Some(i) = state.table_state.selected() {
+                                    if let Some(&real_idx) = indices.get(i) {
+                                        if real_idx < state.history.len()
+                                            && state.history[real_idx].status
+                                                == HistoryStatus::Pending
                                         {
-                                            let full_title = item.clean_full_title();
-                                            state.history[real_idx].status =
-                                                HistoryStatus::Downloading;
-                                            state.history[real_idx].time = chrono::Local::now()
-                                                .format("%d/%m/%Y %H:%M:%S")
-                                                .to_string();
-                                            state.history[real_idx].details = None;
+                                            state.request_action_or_delete();
+                                        }
+                                    }
+                                }
+                            }
+                            KeyCode::Char('r') | KeyCode::Char('R') => {
+                                let indices = state.filtered_indices();
+                                if let Some(i) = state.table_state.selected() {
+                                    if let Some(&real_idx) = indices.get(i) {
+                                        if real_idx < state.history.len()
+                                            && state.history[real_idx].status
+                                                == HistoryStatus::Pending
+                                        {
+                                            state.request_action_or_delete();
+                                        }
+                                    }
+                                }
+                            }
+                            KeyCode::Char('t') | KeyCode::Char('T') => {
+                                let indices = state.filtered_indices();
+                                if let Some(i) = state.table_state.selected() {
+                                    if let Some(&real_idx) = indices.get(i) {
+                                        if real_idx < state.history.len() {
+                                            let item = &state.history[real_idx];
+                                            if item.status == HistoryStatus::Failed
+                                                || item.status == HistoryStatus::Pending
+                                                || item.status == HistoryStatus::Missing
+                                            {
+                                                let full_title = item.clean_full_title();
+                                                state.history[real_idx].status =
+                                                    HistoryStatus::Downloading;
+                                                state.history[real_idx].time = chrono::Local::now()
+                                                    .format("%d/%m/%Y %H:%M:%S")
+                                                    .to_string();
+                                                state.history[real_idx].details = None;
 
-                                            let db_clone = Arc::clone(&db);
-                                            let dl_clone = Arc::clone(&downloader);
-                                            let title_clone = full_title.clone();
-                                            let tx_clone = event_tx.clone();
-                                            tokio::spawn(async move {
-                                                let _ = db_clone
-                                                    .record_event("DOWNLOAD_START", &title_clone);
-                                                match dl_clone.download(&title_clone).await {
-                                                    Ok(()) => {
-                                                        let _ = db_clone
-                                                            .record(&title_clone, "SUCESSO");
-                                                        let _ = db_clone.record_event(
-                                                            "DOWNLOAD_FINISH",
-                                                            &format!("OK|{}", title_clone),
-                                                        );
-                                                        let _ = tx_clone
+                                                let db_clone = Arc::clone(&db);
+                                                let dl_clone = Arc::clone(&downloader);
+                                                let title_clone = full_title.clone();
+                                                let tx_clone = event_tx.clone();
+                                                tokio::spawn(async move {
+                                                    let _ = db_clone.record_event(
+                                                        "DOWNLOAD_START",
+                                                        &title_clone,
+                                                    );
+                                                    match dl_clone.download(&title_clone).await {
+                                                        Ok(()) => {
+                                                            let _ = db_clone
+                                                                .record(&title_clone, "SUCESSO");
+                                                            let _ = db_clone.record_event(
+                                                                "DOWNLOAD_FINISH",
+                                                                &format!("OK|{}", title_clone),
+                                                            );
+                                                            let _ = tx_clone
                                                             .send(
                                                                 CollectorEvent::DownloadFinished {
                                                                     title: title_clone,
@@ -576,19 +622,19 @@ pub async fn run_tui(
                                                                 },
                                                             )
                                                             .await;
-                                                    }
-                                                    Err(e) => {
-                                                        let err_msg = e.to_string();
-                                                        let _ =
-                                                            db_clone.record(&title_clone, "FALHA");
-                                                        let _ = db_clone.record_event(
-                                                            "DOWNLOAD_FINISH",
-                                                            &format!(
-                                                                "ERR|{}|{}",
-                                                                err_msg, title_clone
-                                                            ),
-                                                        );
-                                                        let _ = tx_clone
+                                                        }
+                                                        Err(e) => {
+                                                            let err_msg = e.to_string();
+                                                            let _ = db_clone
+                                                                .record(&title_clone, "FALHA");
+                                                            let _ = db_clone.record_event(
+                                                                "DOWNLOAD_FINISH",
+                                                                &format!(
+                                                                    "ERR|{}|{}",
+                                                                    err_msg, title_clone
+                                                                ),
+                                                            );
+                                                            let _ = tx_clone
                                                             .send(
                                                                 CollectorEvent::DownloadFinished {
                                                                     title: title_clone,
@@ -597,18 +643,25 @@ pub async fn run_tui(
                                                                 },
                                                             )
                                                             .await;
+                                                        }
                                                     }
-                                                }
-                                            });
+                                                });
+                                            }
                                         }
                                     }
                                 }
                             }
+                            KeyCode::Char('d') | KeyCode::Delete => {
+                                state.request_action_or_delete()
+                            }
+                            _ => {}
                         }
-                        KeyCode::Char('d') | KeyCode::Delete => state.request_action_or_delete(),
-                        _ => {}
                     }
                 }
+                Event::Resize(_, _) => {
+                    needs_redraw = true;
+                }
+                _ => {}
             }
         }
     }
@@ -719,10 +772,10 @@ fn render_ui(f: &mut Frame, state: &mut TuiState) {
             };
 
             Row::new(vec![
-                Cell::from(item.time.clone()),
+                Cell::from(item.time.as_str()),
                 Cell::from(item.status.as_str()).style(status_style),
-                Cell::from(item.artist.clone()),
-                Cell::from(item.display_track_and_details()),
+                Cell::from(item.artist.as_str()),
+                Cell::from(item.display_track_and_details().into_owned()),
             ])
         })
         .collect();
@@ -769,7 +822,7 @@ fn render_ui(f: &mut Frame, state: &mut TuiState) {
     f.render_stateful_widget(table, chunks[1], &mut state.table_state);
 
     // 3. Footer com Atalhos Interativos e Contagem Físico-Atômica do Acervo
-    let total_disco = count_mp3_files(&state.output_dir);
+    let total_disco = state.total_disk;
 
     let filter_info = if !state.search_query.is_empty() {
         format!(" | [Filtro: \"{}\" - 'c' limpa]", state.search_query)
@@ -1121,6 +1174,58 @@ mod tests {
         state.request_action_or_delete();
         assert!(state.pending_delete.is_some());
         state.cancel_action_or_delete();
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_tui_total_disk_cache_and_event_driven_updates() {
+        let unique = format!(
+            "test_tui_disk_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let temp_dir = std::env::temp_dir().join(&unique);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let db_path = temp_dir.join("test.db");
+        let db = Database::open(db_path.to_str().unwrap()).unwrap();
+
+        // 1. Cria 2 arquivos mp3 e 1 arquivo irrelevante
+        std::fs::write(temp_dir.join("song1.mp3"), b"dummy").unwrap();
+        std::fs::write(temp_dir.join("song2.mp3"), b"dummy").unwrap();
+        std::fs::write(temp_dir.join("notes.txt"), b"dummy").unwrap();
+
+        // 2. TuiState::new lê o disco uma única vez
+        let mut state = TuiState::new("http://example.com", temp_dir.to_str().unwrap());
+        assert_eq!(state.total_disk, 2);
+
+        // 3. Conclusão de download com sucesso incrementa o cache em memória sem re-escanear
+        state.handle_event(CollectorEvent::DownloadFinished {
+            title: "Queen - Radio Ga Ga".to_string(),
+            success: true,
+            message: "OK".to_string(),
+        });
+        assert_eq!(state.total_disk, 3);
+        assert_eq!(state.total_success, 1);
+
+        // 4. Deleção de faixa com sucesso no disco decrementa o contador
+        let song_file = temp_dir.join("Queen - Radio Ga Ga.mp3");
+        std::fs::write(&song_file, b"dummy").unwrap();
+        db.record("Queen - Radio Ga Ga", "SUCESSO").unwrap();
+
+        state.table_state.select(Some(0));
+        state.request_action_or_delete();
+        assert!(state.pending_delete.is_some());
+        state.confirm_delete(&db);
+        assert_eq!(state.total_disk, 2);
+        assert_eq!(state.total_success, 0);
+
+        // 5. refresh_disk_count atualiza o contador caso agentes externos alterem a pasta
+        std::fs::write(temp_dir.join("song3.mp3"), b"dummy").unwrap();
+        state.refresh_disk_count();
+        assert_eq!(state.total_disk, 3);
 
         let _ = std::fs::remove_dir_all(&temp_dir);
     }

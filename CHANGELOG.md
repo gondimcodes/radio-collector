@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.4.2] - 2026-11-12
+
+### Fixed
+- **TUI CPU Saturation & Event-Driven Rendering**:
+  - Eliminated synchronous disk directory traversal (`std::fs::read_dir`) executed 20 times per second in `render_ui`, replacing it with an event-driven in-memory cache (`state.total_disk`) updated on download completion, deletion, and periodic background reconciliation.
+  - Eliminated unconditional 20 FPS terminal redraws in `run_tui`: rendering is now strictly triggered on-demand via dirty flag (`needs_redraw`) upon keyboard interactions, terminal resizing, channel event delivery, or 500ms header clock heartbeats.
+  - Reduced heap churn across thousands of history items in `render_ui` by using zero-copy string references (`as_str()`) and `Cow<'_, str>` in `display_track_and_details()`, preventing tens of thousands of string allocations per second.
+- **Dependency Security Advisory Resolution (CVE-2026-119375)**:
+  - Upgraded `rusqlite` to `0.42` (`libsqlite3-sys 0.40.0`), resolving advisory RUSTSEC-2026-0459.
+
+### Added
+- **Automated Regression Tests**:
+  - Added `test_tui_total_disk_cache_and_event_driven_updates` in `src/tui.rs` validating in-memory cache consistency on startup, download finish, track deletion, and external disk syncing.
+
+---
+
 ## [1.4.1] - 2026-11-04
 
 ### Fixed
